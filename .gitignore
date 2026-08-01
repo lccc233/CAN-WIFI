@@ -1,0 +1,31 @@
+# ---- ESP-IDF 构建产物 ----
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults.old
+
+# ---- 组件管理生成物 ----
+managed_components/
+dependencies.lock
+
+# ---- 链接/烧录产物 ----
+*.bin
+*.elf
+*.map
+
+# ---- IDE / 编辑器 ----
+.vscode/
+.idea/
+*.swp
+
+# ---- 本地工具状态 ----
+.claude/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+
+# ---- 操作系统 ----
+Thumbs.db
+.DS_Store
