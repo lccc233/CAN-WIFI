@@ -11,6 +11,7 @@
   - 点击某行可查看该 ID 的历史消息详情
   - 支持手动发送任意 CAN 帧、一键清空
 - **WiFi SoftAP**：设备自己发布热点 `SDLG-CAN-WIFI`（密码 `12345678`），手机/电脑连上后访问 `http://192.168.4.1` 或 `http://can-monitor.local`
+- **状态灯**（WS2812，GPIO48）：**无设备连接 WiFi → 红灯常亮；有设备连接 → 炫彩**（色相循环）
 
 ## 硬件
 
@@ -24,6 +25,7 @@
   |------|------|
   | CAN TX | GPIO5 |
   | CAN RX | GPIO4 |
+  | WS2812 DIN | GPIO48 |
 - **供电/烧录**：USB 线接板载 USB-Serial/JTAG 口
 
 ## 构建与烧录
@@ -54,9 +56,10 @@ idf.py -p <COM口> build flash monitor
 
 ```
 main/
-├── main.c          # 初始化：NVS → WiFi → CAN → Web
+├── main.c          # 初始化：NVS → WiFi → CAN → Web → LED
 ├── can.c / can.h   # TWAI 驱动、RX 任务、每 ID 频率统计
-├── wifi.c / wifi.h # WiFi STA + mDNS
+├── wifi.c / wifi.h # WiFi SoftAP + mDNS + 客户端计数
+├── led.c / led.h   # WS2812 状态灯（红=无客户端，炫彩=有客户端）
 ├── web_server.c    # HTTP 服务与 JSON API
 └── web_page.h      # 前端页面（内嵌 HTML/CSS/JS）
 ```

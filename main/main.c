@@ -9,6 +9,7 @@
 #include "wifi.h"
 #include "can.h"
 #include "web_server.h"
+#include "led.h"
 
 static const char *TAG = "main";
 
@@ -33,6 +34,9 @@ void app_main(void)
 
     // HTTP 服务器
     ESP_ERROR_CHECK(web_server_start());
+
+    // WS2812 状态灯（无客户端=红灯，有客户端=炫彩）
+    ESP_ERROR_CHECK(led_init());
 
     ESP_LOGI(TAG, "=============================================");
     ESP_LOGI(TAG, "  CAN Bus Monitor Ready!");

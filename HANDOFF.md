@@ -11,6 +11,7 @@
 1. **WiFi SoftAP** (设备自己发布热点 SDLG-CAN-WIFI，密码 12345678)
 2. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
 3. **网页 CAN 工具** (HTTP Server，暗色主题表格显示收发 CAN 消息)
+4. **状态灯** (WS2812 GPIO48：无客户端连接=红灯常亮，有客户端=炫彩)
 
 ## CAN 不通根因 (2026-07-29)
 
@@ -48,7 +49,8 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 | 文件 | 说明 |
 |------|------|
 | `main/can.c` | TWAI 驱动初始化、RX 任务、告警处理、发送 API |
-| `main/wifi.c` | WiFi STA 连接、mDNS |
+| `main/wifi.c` | WiFi SoftAP 发布、客户端计数、mDNS |
+| `main/led.c` | WS2812 状态灯（无客户端=红，有客户端=炫彩） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/send /api/clear |
 | `main/web_page.h` | 嵌入式 HTML/CSS/JS 网页 |
-| `main/main.c` | 入口：NVS → WiFi → CAN → HTTP Server |
+| `main/main.c` | 入口：NVS → WiFi → CAN → HTTP Server → LED |

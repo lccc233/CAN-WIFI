@@ -12,3 +12,4 @@
 
 esp_err_t wifi_init_softap(void);
 bool      wifi_is_connected(void);
+int       wifi_get_sta_count(void);   // 当前连接的客户端数

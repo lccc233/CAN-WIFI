@@ -13,24 +13,32 @@
 static const char *TAG = "wifi";
 
 static bool s_ap_ready = false;
+static volatile int s_sta_count = 0;   // 当前连接的客户端数
 
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         wifi_event_ap_staconnected_t *event = (wifi_event_ap_staconnected_t *)data;
-        ESP_LOGI(TAG, "Station connected: " MACSTR " AID=%d",
-                 MAC2STR(event->mac), event->aid);
+        s_sta_count++;
+        ESP_LOGI(TAG, "Station connected: " MACSTR " AID=%d (total=%d)",
+                 MAC2STR(event->mac), event->aid, s_sta_count);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
         wifi_event_ap_stadisconnected_t *event = (wifi_event_ap_stadisconnected_t *)data;
-        ESP_LOGI(TAG, "Station disconnected: " MACSTR " AID=%d",
-                 MAC2STR(event->mac), event->aid);
+        if (s_sta_count > 0) s_sta_count--;
+        ESP_LOGI(TAG, "Station disconnected: " MACSTR " AID=%d (total=%d)",
+                 MAC2STR(event->mac), event->aid, s_sta_count);
     }
 }
 
 bool wifi_is_connected(void)
 {
     return s_ap_ready;
+}
+
+int wifi_get_sta_count(void)
+{
+    return s_sta_count;
 }
 
 // 启动 SoftAP 热点（设备自己发布 WiFi）
