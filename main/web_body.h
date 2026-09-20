@@ -42,27 +42,7 @@
     <div class="detail-header">
       <span>ID:</span><span class="id-label" id="detailId"></span>
       <span id="detailCount" class="msg-count"></span>
-      <span class="view-tabs">
-        <button class="tab active" id="tabChart">Chart</button>
-        <button class="tab" id="tabTable">Table</button>
-      </span>
-    </div>
-
-    <!-- 曲线视图：Y = 前 4 字节拼接成的整数 -->
-    <div class="chart-wrap" id="chartWrap">
-      <canvas id="chartCanvas"></canvas>
-      <div class="chart-note">
-        <span id="chartNote"></span>
-        <span class="chart-ctl">
-          Byte order:
-          <label class="checkbox-label"><input type="radio" name="byteOrder" id="orderBE" value="be" checked> 大端 (BE)</label>
-          <label class="checkbox-label"><input type="radio" name="byteOrder" id="orderLE" value="le"> 小端 (LE)</label>
-          <label class="checkbox-label"><input type="checkbox" id="chartSigned"> 有符号</label>
-        </span>
-      </div>
-    </div>
-
-    <!-- 表格视图 -->
+      <!-- 表格视图 -->
     <div id="tableView">
       <table>
         <thead>

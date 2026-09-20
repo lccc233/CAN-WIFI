@@ -9,7 +9,6 @@ var lastTotal = 0;
 var lastRecOn = false;
 var currentView = 'main';   // 'main' | 'detail' | 'vi'
 var detailId = '';
-var detailMode = 'chart';   // 详情视图默认显示曲线
 var autoScrollMain = true;
 var autoScrollDetail = true;
 
@@ -101,11 +100,6 @@ function renderMain() {
   document.getElementById('msgCount').textContent = allMessages.length + ' msgs, ' + ids.length + ' IDs';
 }
 
-function renderDetail() {
-  if (detailMode === 'chart') renderChart();
-  else renderDetailTable();
-}
-
 function renderDetailTable() {
   var filtered = [];
   for (var i = 0; i < allMessages.length; i++) {
@@ -129,48 +123,6 @@ function renderDetailTable() {
   if (autoScrollDetail) wrap.scrollTop = 0;
 }
 
-// ---- 曲线视图 ----
-// Y 值 = 报文前 4 个字节按所选字节序拼成的 32 位整数
-
-var CHART_MAX_POINTS = 1200;   // 仅绘制最近这么多点，避免手机端卡顿
-
-function setDetailMode(mode) {
-  detailMode = mode;
-  document.getElementById('chartWrap').classList
-    .toggle('hidden', mode !== 'chart');
-  document.getElementById('tableView').classList
-    .toggle('hidden', mode !== 'table');
-  document.getElementById('tabChart').classList
-    .toggle('active', mode === 'chart');
-  document.getElementById('tabTable').classList
-    .toggle('active', mode === 'table');
-  renderDetail();
-}
-
-// 取报文前 4 字节拼成整数（不足 4 字节时按现有字节数处理）
-function dataToInt(m, be, signed) {
-  var hex = m.data.split(' ');
-  var n = Math.min(4, hex.length);
-  if (n === 0) return null;
-  var bytes = [];
-  for (var i = 0; i < n; i++) {
-    var b = parseInt(hex[i], 16);
-    if (isNaN(b)) return null;
-    bytes.push(b);
-  }
-  var v = 0;
-  if (be) {
-    // 大端：第一个字节是最高位（CAN 信号的常见约定）
-    for (var i = 0; i < bytes.length; i++) v = v * 256 + bytes[i];
-  } else {
-    // 小端：第一个字节是最低位
-    for (var i = bytes.length - 1; i >= 0; i--) v = v * 256 + bytes[i];
-  }
-  // 不足 4 字节时不按 32 位做符号扩展
-  if (signed && bytes.length === 4 && v >= 2147483648) v -= 4294967296;
-  return v;
-}
-
 // 生成易读的刻度步长（1/2/5 × 10^n）
 function niceStep(range, target) {
   var raw = range / target;
@@ -179,160 +131,6 @@ function niceStep(range, target) {
   var norm = raw / mag;
   var step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
   return step * mag;
-}
-
-function fmtAxisNum(v, step) {
-  var dec = step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log(step) / Math.LN10));
-  return v.toFixed(dec);
-}
-
-function fmtValue(v) {
-  var s = Math.round(v).toString();
-  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
-function renderChart() {
-  var canvas = document.getElementById('chartCanvas');
-  var note = document.getElementById('chartNote');
-
-  var be = document.getElementById('orderBE').checked;
-  var signed = document.getElementById('chartSigned').checked;
-
-  var pts = [];
-  for (var i = 0; i < allMessages.length; i++) {
-    var m = allMessages[i];
-    if (m.id !== detailId) continue;
-    var v = dataToInt(m, be, signed);
-    if (v !== null) pts.push({ t: m.t, v: v });
-  }
-  pts.sort(function(a, b) { return a.t - b.t; });
-
-  var total = pts.length;
-  if (total > CHART_MAX_POINTS) pts = pts.slice(total - CHART_MAX_POINTS);
-
-  // 按容器尺寸设置画布（含高分屏缩放）
-  var wrap = document.getElementById('chartWrap');
-  var cssW = Math.max(320, wrap.clientWidth - 24);
-  var cssH = Math.max(200, (window.innerHeight || 700) * 0.42);
-  var dpr = window.devicePixelRatio || 1;
-  canvas.style.height = cssH + 'px';
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
-  var ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssW, cssH);
-
-  if (total === 0) {
-    ctx.fillStyle = '#aaa';
-    ctx.font = '12px Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('暂无数据', cssW / 2, cssH / 2);
-    note.textContent = '';
-    return;
-  }
-
-  var lo = pts[0].v, hi = pts[0].v;
-  for (var i = 1; i < pts.length; i++) {
-    if (pts[i].v < lo) lo = pts[i].v;
-    if (pts[i].v > hi) hi = pts[i].v;
-  }
-  var t0 = pts[0].t, t1 = pts[pts.length - 1].t;
-
-  // 时间轴退化（全部同一毫秒）时给个最小跨度，避免除零
-  if (t1 <= t0) t1 = t0 + 1;
-
-  var padL = 62, padR = 14, padT = 14, padB = 30;
-  var plotW = cssW - padL - padR;
-  var plotH = cssH - padT - padB;
-
-  // Y 轴范围：退化成一条直线时上下各留 1
-  var yLo = lo, yHi = hi;
-  if (yHi === yLo) { yLo = lo - 1; yHi = hi + 1; }
-
-  var stepY = niceStep(yHi - yLo, 5);
-  var yStart = Math.floor(yLo / stepY) * stepY;
-  var yEnd = Math.ceil(yHi / stepY) * stepY;
-
-  var xOf = function(t) { return padL + (t - t0) / (t1 - t0) * plotW; };
-  var yOf = function(v) { return padT + (yEnd - v) / (yEnd - yStart) * plotH; };
-
-  // 网格 + Y 轴刻度
-  ctx.font = '10px Consolas, monospace';
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  var first = true;
-  for (var v = yStart; v <= yEnd + stepY * 0.5; v += stepY) {
-    var y = yOf(v);
-    ctx.strokeStyle = (v === 0) ? '#d0d0d0' : '#f0f0f0';
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(padL + plotW, y);
-    ctx.stroke();
-
-    ctx.fillStyle = '#999';
-    ctx.fillText(fmtAxisNum(v, stepY), padL - 6, y);
-
-    // 只在顶部标一次量纲
-    if (first) {
-      ctx.fillStyle = '#bbb';
-      ctx.textAlign = 'left';
-      ctx.fillText('hex→int', padL + 4, padT + 9);
-      ctx.textAlign = 'right';
-      first = false;
-    }
-  }
-
-  // X 轴刻度（相对第一条报文的秒数）
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  var span = (t1 - t0) / 1000;
-  var stepT = niceStep(span, 6);
-  if (stepT <= 0) stepT = 1;
-  for (var ts = 0; ts <= span + stepT * 0.5; ts += stepT) {
-    var x = padL + (ts / span) * plotW;
-    if (x > padL + plotW + 0.5) break;
-    ctx.strokeStyle = '#f0f0f0';
-    ctx.beginPath();
-    ctx.moveTo(x, padT);
-    ctx.lineTo(x, padT + plotH);
-    ctx.stroke();
-
-    ctx.fillStyle = '#999';
-    ctx.fillText(ts.toFixed(stepT >= 1 ? 0 : 1) + 's', x, padT + plotH + 6);
-  }
-
-  // 坐标轴
-  ctx.strokeStyle = '#ccc';
-  ctx.beginPath();
-  ctx.moveTo(padL, padT);
-  ctx.lineTo(padL, padT + plotH);
-  ctx.lineTo(padL + plotW, padT + plotH);
-  ctx.stroke();
-
-  // 数据折线
-  ctx.strokeStyle = '#1a73e8';
-  ctx.lineWidth = 1.5;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  for (var i = 0; i < pts.length; i++) {
-    var x = xOf(pts[i].t), y = yOf(pts[i].v);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-
-  // 点数少时把采样点也画出来，否则单点/稀疏数据看不出东西
-  if (pts.length <= 200) {
-    ctx.fillStyle = '#1a73e8';
-    for (var i = 0; i < pts.length; i++) {
-      ctx.beginPath();
-      ctx.arc(xOf(pts[i].t), yOf(pts[i].v), 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  note.textContent = total + ' 点 · 最新 ' + fmtValue(pts[pts.length - 1].v)
-    + ' · 范围 ' + fmtValue(lo) + ' ~ ' + fmtValue(hi)
-    + (total > CHART_MAX_POINTS ? '（仅绘制最近 ' + CHART_MAX_POINTS + ' 点）' : '');
 }
 
 function showDetail(id) {
@@ -346,7 +144,7 @@ function showDetail(id) {
   document.getElementById('detailIdLabel').textContent = id;
   document.getElementById('headerTitle').textContent = 'CAN Detail';
   document.getElementById('backRow').classList.remove('hidden');
-  renderDetail();
+  renderDetailTable();
 }
 
 function showMain() {
@@ -518,7 +316,6 @@ function setTopTab(id) {
 document.getElementById('backBtn').addEventListener('click', showMain);
 
 document.getElementById('viewDetail').addEventListener('scroll', function() {
-  if (detailMode !== 'table') return;   // 曲线视图下不参与表格的自动滚动
   var el = document.getElementById('viewDetail');
   autoScrollDetail = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
 });
@@ -527,20 +324,11 @@ document.getElementById('viewDetail').addEventListener('scroll', function() {
 document.getElementById('tabMonitor').addEventListener('click', showMain);
 document.getElementById('tabVI').addEventListener('click', showVI);
 
-// 视图切换与曲线选项
-document.getElementById('tabChart').addEventListener('click', function() { setDetailMode('chart'); });
-document.getElementById('tabTable').addEventListener('click', function() { setDetailMode('table'); });
-document.getElementById('orderBE').addEventListener('change', renderDetail);
-document.getElementById('orderLE').addEventListener('change', renderDetail);
-document.getElementById('chartSigned').addEventListener('change', renderDetail);
-
 // 窗口尺寸变化时重绘（画布尺寸依赖像素，不能只靠 CSS 拉伸）
 var chartResizeTimer = null;
 window.addEventListener('resize', function() {
   clearTimeout(chartResizeTimer);
-  chartResizeTimer = setTimeout(function() {
-    if (currentView === 'detail' && detailMode === 'chart') renderChart();
-    else if (currentView === 'vi') drawVI();
+  chartResizeTimer = setTimeout(function() {if (currentView === 'vi') drawVI();
   }, 150);
 });
 
@@ -618,7 +406,7 @@ function processMessages(d) {
     allFreqs = d.freqs || [];
     lastTotal = d.total;
     if (currentView === 'main') renderMain();
-    else if (currentView === 'detail') renderDetail();
+    else if (currentView === 'detail') renderDetailTable();
   }
   document.getElementById('statusDot').className = 'dot on';
   document.getElementById('statusText').textContent = 'Connected';
@@ -637,7 +425,7 @@ document.getElementById('clearBtn').addEventListener('click', function() {
     allFreqs = [];
     lastTotal = 0;
     if (currentView === 'main') renderMain();
-    else renderDetail();
+    else renderDetailTable();
   });
 });
 

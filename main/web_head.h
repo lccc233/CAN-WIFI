@@ -63,7 +63,6 @@
   .detail-header .id-label { color: #1a73e8; font-weight: bold; font-size: 1rem; }
 
   /* 详情视图：Chart / Table 切换 */
-  .view-tabs { display: flex; gap: 4px; margin-left: auto; }
   .tab {
     padding: 3px 12px; border: 1px solid #c2d7f5; border-radius: 4px;
     background: #fff; color: #1a73e8; cursor: pointer;
@@ -73,13 +72,11 @@
 
   /* 曲线视图 */
   .chart-wrap { padding: 8px 12px 12px; }
-  #chartCanvas { display: block; width: 100%; background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; }
   .chart-note {
     color: #888; font-size: 0.72rem; padding: 6px 2px 0;
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }
   .chart-ctl { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .chart-ctl .checkbox-label { font-size: 0.72rem; gap: 3px; }
 
   table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
   thead { position: sticky; top: 0; z-index: 1; }
