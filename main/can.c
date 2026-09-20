@@ -5,6 +5,8 @@
 #include "esp_log.h"
 #include "driver/twai.h"
 #include "can.h"
+#include "can_logger.h"
+#include "signal_decode.h"
 
 static const char *TAG = "can";
 
@@ -173,6 +175,16 @@ static void can_rx_task(void *arg)
             g_ring.head++;
             g_ring.count++;
             can_freq_record(rx_msg.identifier, now_ms);
+            can_log_write(&g_ring.entries[idx]);
+
+            // 实时电压/电流显示缓冲（曲线页数据源）
+            if (g_ring.entries[idx].id == SIG_ID_BUS_VI) {
+                sig_bus_vi_t vi;
+                sig_decode_bus_vi(g_ring.entries[idx].data, g_ring.entries[idx].dlc, &vi);
+                if (vi.valid) {
+                    sig_vi_push(g_ring.entries[idx].timestamp_ms, &vi);
+                }
+            }
         }
     }
 }

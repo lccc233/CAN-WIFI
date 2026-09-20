@@ -8,6 +8,7 @@
 #include "esp_event.h"
 #include "wifi.h"
 #include "can.h"
+#include "can_logger.h"
 #include "web_server.h"
 #include "led.h"
 
@@ -31,6 +32,9 @@ void app_main(void)
 
     // CAN 总线初始化（TWAI + RX 任务 + 心跳任务）
     ESP_ERROR_CHECK(can_init());
+
+    // PSRAM 历史数据记录器（失败仅禁用录制，不影响监控）
+    ESP_ERROR_CHECK(can_log_init());
 
     // HTTP 服务器
     ESP_ERROR_CHECK(web_server_start());
