@@ -577,42 +577,51 @@ function updateRecUI(rec) {
 
 var pollBusy = false;
 function pollMessages() {
-  // 前一请求未完成则跳过本轮：SoftAP 响应可能慢于 200ms，
-  // 并发多个请求会拖垮 httpd 并导致数据乱序
   if (pollBusy) return;
   pollBusy = true;
   fetch('/api/messages')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      document.getElementById('statusDot').className = 'dot on';
-      document.getElementById('statusText').textContent = 'Connected';
-      if (d.clk) {
-        clkSync = d.clk.sync;
-        clkBoot = d.clk.boot;
-        clkEp = d.clk.ep;
+    .then(function(r) { return r.text(); })
+    .then(function(s) {
+      var d = null;
+      try { d = JSON.parse(s); } catch (e) { d = null; }
+      if (d) {
+        try { processMessages(d); } catch (e) { /* render errors keep polling */ }
+      } else {
+        document.getElementById('statusDot').className = 'dot off';
+        document.getElementById('statusText').textContent = 'Bad response';
       }
-      if (d.rec) {
-        updateRecUI(d.rec);
-        lastRecOn = d.rec.on;
-      }
-      if (d.vi) {
-        allVi = d.vi;
-        if (currentView === 'vi') drawVI();
-      }
-      if (d.total !== lastTotal) {
-        allMessages = d.messages;
-        allFreqs = d.freqs || [];
-        lastTotal = d.total;
-        if (currentView === 'main') renderMain();
-        else if (currentView === 'detail') renderDetail();
-      }
-      pollBusy = false;
-    })
-    .catch(function() {
+      pollBusy = false;   // success path always releases the gate
+    }, function() {
       document.getElementById('statusDot').className = 'dot off';
       document.getElementById('statusText').textContent = 'Disconnected';
       pollBusy = false;
     });
+}
+
+function processMessages(d) {
+  if (!d || d.busy) return;   // server busy: keep local data, skip this cycle
+  if (d.clk) {
+    clkSync = !!d.clk.sync;
+    clkBoot = d.clk.boot || 0;
+    clkEp = d.clk.ep || 0;
+  }
+  if (d.rec) {
+    updateRecUI(d.rec);
+    lastRecOn = d.rec.on;
+  }
+  if (d.vi) {
+    allVi = d.vi;
+    if (currentView === 'vi') drawVI();
+  }
+  if (d.total !== lastTotal) {
+    allMessages = d.messages || [];
+    allFreqs = d.freqs || [];
+    lastTotal = d.total;
+    if (currentView === 'main') renderMain();
+    else if (currentView === 'detail') renderDetail();
+  }
+  document.getElementById('statusDot').className = 'dot on';
+  document.getElementById('statusText').textContent = 'Connected';
 }
 
 setInterval(pollMessages, 200);

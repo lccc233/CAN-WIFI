@@ -25,7 +25,10 @@ static httpd_handle_t s_server = NULL;
 #define EXPORT_LINE_BUF         4096
 
 // /api/messages 忙闸：同一时刻只处理一个 poll 请求，后续请求快速返回 busy
+// （C3）。若上一个 poll 客户端中途断开导致标志未释放，3 秒看门狗强制放行，
+// 防止整个轮询被永久卡死。
 static volatile bool s_busy_msgs = false;
+static volatile uint32_t s_busy_since_ms = 0;
 
 // GET / — 返回 HTML 页面
 static esp_err_t root_handler(httpd_req_t *req)
@@ -38,15 +41,17 @@ static esp_err_t root_handler(httpd_req_t *req)
 // GET /api/messages — 返回 CAN 消息 JSON
 static esp_err_t api_messages_handler(httpd_req_t *req)
 {
-    // C3 忙闸：已有 poll 在处理中时快速返回，让客户端沿用本地数据，
-    // 避免慢网下请求堆积。正常单客户端轮询永不触发。
-    if (s_busy_msgs) {
+    // C3 忙闸：已有 poll 在处理中时快速返回，让客户端沿用本地数据。
+    // 看门狗：busy 超过 3 秒视为泄漏，强制放行重新处理。
+    uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    if (s_busy_msgs && (uint32_t)(now_ms - s_busy_since_ms) < 3000) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Cache-Control", "no-store");
         httpd_resp_sendstr(req, "{\"busy\":1}");
         return ESP_OK;
     }
     s_busy_msgs = true;
+    s_busy_since_ms = now_ms;
 
     can_msg_entry_t snapshot[CAN_RX_RING_SIZE];
     uint32_t count, total;
