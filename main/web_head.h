@@ -30,7 +30,7 @@
     pointer-events: none;
     z-index: 0;
   }
-  .header, .content, .send-panel { position: relative; z-index: 1; }
+  .header, .content { position: relative; z-index: 1; }
   .header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 8px 16px; background: #fff;
@@ -55,7 +55,7 @@
   .btn.primary:hover { background: #1557b0; }
   .btn.back { border-color: #666; color: #666; }
 
-  .content { flex: 1; overflow-y: auto; overflow-x: auto; }
+  .content { flex: 1; overflow-y: auto; overflow-x: auto; padding-bottom: 72px; }
   .detail-header {
     padding: 8px 16px; background: #e8f0fe; border-bottom: 1px solid #c2d7f5;
     display: flex; align-items: center; gap: 12px; font-size: 0.85rem;
@@ -100,6 +100,8 @@
   .col-freq { color: #1a73e8; width: 70px; text-align: center; }
 
   .send-panel {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    z-index: 5;
     padding: 10px 16px; background: #fff;
     border-top: 1px solid #ddd;
     box-shadow: 0 -1px 3px rgba(0,0,0,0.06);
