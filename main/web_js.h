@@ -161,24 +161,31 @@ function showMain() {
   renderMain();
 }
 
-// ===== 电压/电流曲线页 =====
+// ===== 曲线页：电流/电压 + 转矩/转速（固定 20s 滚动窗，上下双画布双轴） =====
 
+var VI_WIN_MS = 20000;      // 固定滚动时间窗（服务端缓冲 400 点 x 50ms ≈ 20s）
 var VI_MAX_POINTS = 900;
-var viTimer = null;
 
-function drawVI() {
-  var canvas = document.getElementById('viCanvas');
-  var note = document.getElementById('viNote');
+// 轴刻度文本：大数用 k 缩写，小数位随步长自适应
+function fmtAxisVal(v, step) {
+  var dec = step >= 1 ? 0 : (step >= 0.1 ? 1 : 2);
+  if (Math.abs(v) >= 10000) return (v / 1000).toFixed(1) + 'k';
+  return v.toFixed(dec);
+}
+
+// cfg: { getA, getB: p -> 原始存储值或 null(无效点)；divA, divB: 存储->显示除数；
+//        minSpanA, minSpanB: 最小显示跨度(存储单位)；colA, colB: 线色；
+//        labA, labB: 画布内量纲文本；emptyMsg；noteFn(lastVA, lastVB, cnt) }
+function drawDual(canvas, noteEl, cfg) {
   var pts = allVi.slice();
+  if (pts.length > VI_MAX_POINTS) pts = pts.slice(pts.length - VI_MAX_POINTS);
   var total = pts.length;
-  if (total > VI_MAX_POINTS) pts = pts.slice(total - VI_MAX_POINTS);
 
   var wrap = document.getElementById('viewVI');
   var cssW = Math.max(280, (wrap.clientWidth || window.innerWidth) - 24);
-  var cssH = Math.max(260, Math.floor((window.innerHeight || 700) * 0.62));
+  var cssH = Math.max(190, Math.floor((window.innerHeight || 700) * 0.38));
   var dpr = window.devicePixelRatio || 1;
-  // 关键：CSS 显示尺寸必须与逻辑宽度一致，否则高 dpr 手机上
-  // canvas 属性宽度(cssW*dpr)会撑破页面导致整页缩放错乱
+  // CSS 显示尺寸与逻辑宽度一致，避免高 dpr 手机上 canvas 撑破页面
   canvas.style.width = cssW + 'px';
   canvas.style.height = cssH + 'px';
   canvas.width = Math.round(cssW * dpr);
@@ -191,75 +198,89 @@ function drawVI() {
     ctx.fillStyle = '#aaa';
     ctx.font = '12px Consolas, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('暂无 0x18FF0282 数据，等待报文…', cssW / 2, cssH / 2);
-    note.textContent = '';
+    ctx.fillText(cfg.emptyMsg, cssW / 2, cssH / 2);
+    noteEl.textContent = '';
     return;
   }
 
-  var t0 = pts[0].t, t1 = pts[pts.length - 1].t;
-  if (t1 <= t0) t1 = t0 + 1;
+  var t1 = pts[pts.length - 1].t;
+  var t0 = t1 - VI_WIN_MS;   // 固定滚动窗：数据不足窗口时左侧自然留白
 
-  var padL = 56, padR = 64, padT = 18, padB = 30;
+  // 窗口内有效值 min/max
+  var aLo = Infinity, aHi = -Infinity, bLo = Infinity, bHi = -Infinity, cntA = 0, cntB = 0;
+  for (var i = 0; i < pts.length; i++) {
+    if (pts[i].t < t0) continue;
+    var va = cfg.getA(pts[i]);
+    if (va !== null) { if (va < aLo) aLo = va; if (va > aHi) aHi = va; cntA++; }
+    var vb = cfg.getB(pts[i]);
+    if (vb !== null) { if (vb < bLo) bLo = vb; if (vb > bHi) bHi = vb; cntB++; }
+  }
+
+  // 纵轴：10% 余量 + 最小跨度，再对齐 niceStep
+  function axisOf(lo, hi, minSpan) {
+    if (lo > hi) return null;
+    var r = hi - lo;
+    if (r < minSpan) { var m = (lo + hi) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; r = minSpan; }
+    lo -= r * 0.10; hi += r * 0.10;
+    var step = niceStep(hi - lo, 5);
+    return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step, step];
+  }
+  var aAx = axisOf(aLo, aHi, cfg.minSpanA);
+  var bAx = axisOf(bLo, bHi, cfg.minSpanB);
+  if (!aAx && !bAx) {
+    ctx.fillStyle = '#aaa';
+    ctx.font = '12px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(cfg.emptyMsg, cssW / 2, cssH / 2);
+    noteEl.textContent = '';
+    return;
+  }
+  if (!aAx) aAx = [0, 10, 1];
+  if (!bAx) bAx = [0, 10, 1];
+  var aStart = aAx[0], aEnd = aAx[1], stepA = aAx[2];
+  var bStart = bAx[0], bEnd = bAx[1], stepB = bAx[2];
+
+  var span = (t1 - t0) / 1000;
+  if (span <= 0) span = 0.001;
+  var stepT = niceStep(span, 6) || 1;
+
+  var padL = 56, padR = 64, padT = 18, padB = 26;
   var plotW = cssW - padL - padR;
   var plotH = cssH - padT - padB;
 
-  // 左轴范围 = 电流有效点；右轴 = 电压
-  var cLo = Infinity, cHi = -Infinity;
-  var vLo = Infinity, vHi = -Infinity;
-  for (var i = 0; i < pts.length; i++) {
-    if (!pts[i].f) {
-      if (pts[i].c < cLo) cLo = pts[i].c;
-      if (pts[i].c > cHi) cHi = pts[i].c;
-    }
-    if (pts[i].v < vLo) vLo = pts[i].v;
-    if (pts[i].v > vHi) vHi = pts[i].v;
-  }
-  if (cHi < cLo) { cLo = -10; cHi = 10; }
-  if (vHi < vLo) { vLo = 0; vHi = 1; }
-  if ((cHi - cLo) < 4) { var cm = (cHi + cLo) / 2; cLo = cm - 5; cHi = cm + 5; }
-  if ((vHi - vLo) < 4) { var vm = (vHi + vLo) / 2; vLo = vm - 5; vHi = vm + 5; }
-
-  var stepC = niceStep(cHi - cLo, 5);
-  var stepV = niceStep(vHi - vLo, 5);
-  var cStart = Math.floor(cLo / stepC) * stepC, cEnd = Math.ceil(cHi / stepC) * stepC;
-  var vStart = Math.floor(vLo / stepV) * stepV, vEnd = Math.ceil(vHi / stepV) * stepV;
-
-  var xOf = function(t) { return padL + (t - t0) / (t1 - t0) * plotW; };
-  var yOfC = function(v) { return padT + (cEnd - v) / (cEnd - cStart) * plotH; };
-  var yOfV = function(v) { return padT + (vEnd - v) / (vEnd - vStart) * plotH; };
+  var xOf = function(t) { return padL + (t - t0) / VI_WIN_MS * plotW; };
+  var yOfA = function(v) { return padT + (aEnd - v) / (aEnd - aStart) * plotH; };
+  var yOfB = function(v) { return padT + (bEnd - v) / (bEnd - bStart) * plotH; };
 
   ctx.font = '10px Consolas, monospace';
   ctx.textBaseline = 'middle';
 
-  // 网格 + 左轴（电流）
+  // 水平网格（与左轴刻度一致）+ 左右轴数值
   ctx.textAlign = 'right';
-  for (var v = cStart; v <= cEnd + stepC * 0.5; v += stepC) {
-    var y = yOfC(v);
+  for (var v = aStart; v <= aEnd + stepA * 0.5; v += stepA) {
+    var y = yOfA(v);
     ctx.strokeStyle = (v === 0) ? '#d8d8d8' : '#f0f0f0';
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
-    ctx.fillStyle = '#1a73e8';
-    ctx.fillText((v / 10).toFixed(1), padL - 6, y);
+    ctx.fillStyle = cfg.colA;
+    ctx.fillText(fmtAxisVal(v / cfg.divA, stepA / cfg.divA), padL - 6, y);
+    // 右轴数值按就近网格行对齐绘制，避免两轴刻度线打架
   }
-  // 右轴（电压）
   ctx.textAlign = 'left';
-  ctx.fillStyle = '#ea4335';
-  for (var v = vStart; v <= vEnd + stepV * 0.5; v += stepV) {
-    ctx.fillText((v / 10).toFixed(1), padL + plotW + 6, yOfV(v));
+  ctx.fillStyle = cfg.colB;
+  for (var v = bStart; v <= bEnd + stepB * 0.5; v += stepB) {
+    ctx.fillText(fmtAxisVal(v / cfg.divB, stepB / cfg.divB), padL + plotW + 6, yOfB(v));
   }
-  // 量纲标注
-  ctx.fillStyle = '#1a73e8'; ctx.textAlign = 'left';
-  ctx.fillText('I(A)', padL + 4, padT + 4);
-  ctx.fillStyle = '#ea4335'; ctx.textAlign = 'right';
-  ctx.fillText('U(V)', padL + plotW - 4, padT + 4);
 
-  // X 轴（时间，秒）
-  ctx.fillStyle = '#999'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  var span = (t1 - t0) / 1000;
-  var stepT = niceStep(span, 6) || 1;
+  // 垂直网格（时间）+ 标签
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#999';
   for (var ts = 0; ts <= span + stepT * 0.5; ts += stepT) {
     var x = padL + (ts / span) * plotW;
     if (x > padL + plotW + 0.5) break;
-    ctx.fillText(ts.toFixed(stepT >= 1 ? 0 : 1) + 's', x, padT + plotH + 6);
+    ctx.strokeStyle = '#f5f5f5';
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    ctx.fillText((ts === 0 ? '0s' : '-' + (stepT < 1 ? (span - ts).toFixed(1) : String(Math.round(span - ts))) + 's'), x, padT + plotH + 6);
   }
 
   // 坐标轴框
@@ -268,31 +289,70 @@ function drawVI() {
   ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH);
   ctx.lineTo(padL + plotW, padT + plotH); ctx.lineTo(padL + plotW, padT); ctx.stroke();
 
-  // 电流曲线（跳过哨兵故障点）
-  var nC = 0;
-  ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 1.4; ctx.lineJoin = 'round';
-  ctx.beginPath();
-  for (var i = 0; i < pts.length; i++) {
-    if (pts[i].f) continue;
-    var x = xOf(pts[i].t), y = yOfC(pts[i].c);
-    if (nC === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    nC++;
-  }
-  ctx.stroke();
+  // 量纲标注
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = cfg.colA; ctx.textAlign = 'left';
+  ctx.fillText(cfg.labA, padL + 4, padT + 4);
+  ctx.fillStyle = cfg.colB; ctx.textAlign = 'right';
+  ctx.fillText(cfg.labB, padL + plotW - 4, padT + 4);
 
-  // 电压曲线
-  ctx.strokeStyle = '#ea4335'; ctx.lineWidth = 1.4;
-  ctx.beginPath();
-  for (var i = 0; i < pts.length; i++) {
-    var x = xOf(pts[i].t), y = yOfV(pts[i].v);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  // 曲线（窗口内数据；无效值断线）
+  ctx.lineWidth = 1.4; ctx.lineJoin = 'round';
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
+  line(ctx, pts, t0, xOf, yOfA, cfg.getA, cfg.colA);
+  line(ctx, pts, t0, xOf, yOfB, cfg.getB, cfg.colB);
+  ctx.restore();
   ctx.lineWidth = 1;
 
   var last = pts[pts.length - 1];
-  note.textContent = total + ' 点 · 最新 I=' + (last.f ? '(故障)' : (last.c / 10).toFixed(1) + 'A')
-    + ' U=' + (last.v / 10).toFixed(1) + 'V';
+  noteEl.textContent = total + ' 点 · ' + cfg.noteFn(
+    cfg.getA(last), cfg.getB(last), Math.min(cntA, cntB));
+}
+
+var viTimer = null;
+
+function line(ctx, pts, t0, xOf, yOf, get, color) {
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  var started = false;
+  for (var i = 0; i < pts.length; i++) {
+    if (pts[i].t < t0) continue;
+    var v = get(pts[i]);
+    if (v === null) { started = false; continue; }
+    var x = xOf(pts[i].t), y = yOf(v);
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function drawVI() {
+  drawDual(document.getElementById('viCanvas'), document.getElementById('viNote'), {
+    getA: function(p) { return p.f ? null : p.c; },
+    getB: function(p) { return p.f ? null : p.v; },
+    divA: 10, divB: 10, minSpanA: 10, minSpanB: 10,
+    colA: '#1a73e8', colB: '#ea4335',
+    labA: 'I(A)', labB: 'U(V)',
+    emptyMsg: '暂无 0x18FF0282 数据，等待报文…',
+    noteFn: function(a, b, cnt) {
+      return '最新 I=' + (a === null ? '(故障)' : (a / 10).toFixed(1) + 'A')
+        + ' U=' + (b === null ? '(故障)' : (b / 10).toFixed(1) + 'V');
+    }
+  });
+  drawDual(document.getElementById('tqCanvas'), document.getElementById('tqNote'), {
+    getA: function(p) { return p.m ? p.q : null; },
+    getB: function(p) { return p.m ? p.r : null; },
+    divA: 1, divB: 1, minSpanA: 2, minSpanB: 200,
+    colA: '#188038', colB: '#9334e6',
+    labA: 'T(Nm)', labB: 'n(rpm)',
+    emptyMsg: '等待 0x18FF0182 电机数据…',
+    noteFn: function(a, b, cnt) {
+      if (a === null && b === null) return '等待 0x18FF0182…';
+      return '最新 T=' + fmtAxisVal(a === null ? 0 : a, 1) + 'Nm'
+        + ' n=' + fmtAxisVal(b === null ? 0 : b, 1) + 'rpm';
+    }
+  });
 }
 
 function showVI() {

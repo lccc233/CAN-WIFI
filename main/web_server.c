@@ -19,7 +19,7 @@ static httpd_handle_t s_server = NULL;
 // ---- 集中常量（D3） ----
 #define HTTP_TASK_STACK_SIZE    12288   // /api/messages 局部 snapshot+freq+vbuf 较大
 #define VI_JSON_MAX_POINTS      400     // 单次响应最多返回的曲线点数
-#define VI_BATCH_STR            2048    // vi 行攒发缓冲大小
+#define VI_BATCH_STR            3072    // vi 行攒发缓冲大小
 #define EXPORT_READ_BATCH       64      // 导出每批读取条数
 #define EXPORT_FLUSH_INTERVAL_MS 10     // 每批发送间隔（让出 CPU 给 RX/其他连接）
 #define EXPORT_LINE_BUF         4096
@@ -134,12 +134,15 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
             if (!sig_vi_get_back(i, &vp)) continue;
             // i==vi_total-1 是最旧一条（第一个输出），不加前导逗号
             int n = snprintf(vbuf + vused, sizeof(vbuf) - vused,
-                     "%s{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d}",
+                     "%s{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d,\"q\":%d,\"r\":%d,\"m\":%d}",
                      (i == vi_total - 1) ? "" : ",",
                      (unsigned long)vp.t,
                      (int)vp.current_x10,
                      (unsigned long)vp.voltage_x10,
-                     (int)vp.fault);
+                     (int)vp.fault,
+                     (int)vp.torque,
+                     (int)vp.rpm,
+                     (int)vp.motor_v);
             if (n < 0 || (size_t)n >= sizeof(vbuf) - vused) {
                 // 缓冲将满：刷出已攒部分后重写该点
                 esp_err_t cerr = httpd_resp_send_chunk(req, vbuf, vused);
@@ -149,11 +152,14 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
                     return ESP_FAIL;
                 }
                 vused = 0;
-                n = snprintf(vbuf, sizeof(vbuf) - vused, "{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d}",
+                n = snprintf(vbuf, sizeof(vbuf) - vused, "{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d,\"q\":%d,\"r\":%d,\"m\":%d}",
                      (unsigned long)vp.t,
                      (int)vp.current_x10,
                      (unsigned long)vp.voltage_x10,
-                     (int)vp.fault);
+                     (int)vp.fault,
+                     (int)vp.torque,
+                     (int)vp.rpm,
+                     (int)vp.motor_v);
             }
             vused += n;
 

@@ -71,6 +71,16 @@
         </span>
       </div>
     </div>
+    <div class="chart-wrap">
+      <canvas id="tqCanvas"></canvas>
+      <div class="chart-note">
+        <span id="tqNote"></span>
+        <span class="chart-ctl">
+          <span style="color:#188038;">&#9632; 转矩 T (Nm)</span>
+          <span style="color:#9334e6;">&#9632; 转速 n (rpm)</span>
+        </span>
+      </div>
+    </div>
   </div>
 
   <div class="send-panel hidden" id="backRow">

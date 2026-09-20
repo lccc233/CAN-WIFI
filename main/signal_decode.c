@@ -53,8 +53,33 @@ bool sig_is_record_id(uint32_t id)
     return id == SIG_ID_MOTOR_DRIVE || id == SIG_ID_BUS_VI;
 }
 
-// ---- 实时 V/I 显示环形缓冲 ----
-#define VI_RING_SIZE  1200  // 2 的幂，50ms 周期下约 60 秒
+// ---- 实时 V/I + 电机参数显示环形缓冲 ----
+#define VI_RING_SIZE  1024  // 必须为 2 的幂（用 & 掩码取模），50ms 周期下约 51 秒
+
+// 最新一帧电机参数（10ms 报文高频更新，50ms 曲线点采样时读取）
+static sig_motor_t s_motor_cache;
+static SemaphoreHandle_t s_motor_mutex;
+
+void sig_motor_set(uint32_t timestamp_ms, const sig_motor_t *motor)
+{
+    (void)timestamp_ms;
+    if (!motor || !motor->valid) return;
+    if (!s_motor_mutex) {
+        s_motor_mutex = xSemaphoreCreateMutex();
+        if (!s_motor_mutex) return;
+    }
+    xSemaphoreTake(s_motor_mutex, portMAX_DELAY);
+    s_motor_cache = *motor;
+    xSemaphoreGive(s_motor_mutex);
+}
+
+void sig_motor_get(sig_motor_t *out)
+{
+    if (!s_motor_mutex || !out) return;
+    xSemaphoreTake(s_motor_mutex, portMAX_DELAY);
+    *out = s_motor_cache;
+    xSemaphoreGive(s_motor_mutex);
+}
 
 typedef struct {
     sig_vi_point_t buf[VI_RING_SIZE];
@@ -65,7 +90,7 @@ typedef struct {
 
 static vi_ring_t s_vi_ring;
 
-void sig_vi_push(uint32_t timestamp_ms, const sig_bus_vi_t *vi)
+void sig_vi_push(uint32_t timestamp_ms, const sig_bus_vi_t *vi, const sig_motor_t *motor)
 {
     if (!s_vi_ring.mutex) {
         s_vi_ring.mutex = xSemaphoreCreateMutex();
@@ -77,6 +102,15 @@ void sig_vi_push(uint32_t timestamp_ms, const sig_bus_vi_t *vi)
     p->current_x10 = vi->current_x10;
     p->voltage_x10 = vi->voltage_x10;
     p->fault = vi->current_fault ? 1 : 0;
+    if (motor && motor->valid) {
+        p->torque = motor->torque;
+        p->rpm = motor->speed_rpm;
+        p->motor_v = 1;
+    } else {
+        p->torque = 0;
+        p->rpm = 0;
+        p->motor_v = 0;
+    }
     s_vi_ring.head++;
     if (s_vi_ring.count < VI_RING_SIZE) s_vi_ring.count++;
     xSemaphoreGive(s_vi_ring.mutex);
