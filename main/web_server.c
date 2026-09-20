@@ -80,7 +80,7 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     can_log_get_status(&rec);
     char rec_hdr[128];
     snprintf(rec_hdr, sizeof(rec_hdr),
-             "{\"rec\":{\"on\":%s,\"cnt\":%lu,\"cap\":%lu,\"drop\":%lu,\"ms\":%lu,\"psram\":%s},\"total\":%lu,\"freqs\":[",
+             "\"rec\":{\"on\":%s,\"cnt\":%lu,\"cap\":%lu,\"drop\":%lu,\"ms\":%lu,\"psram\":%s},\"total\":%lu,\"freqs\":[",
              rec.recording ? "true" : "false",
              (unsigned long)rec.count,
              (unsigned long)rec.capacity,
