@@ -142,7 +142,9 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
                      (int)vp.fault);
             if (n < 0 || (size_t)n >= sizeof(vbuf) - vused) {
                 // 缓冲将满：刷出已攒部分后重写该点
-                if (httpd_resp_send_chunk(req, vbuf, vused) != ESP_OK) {
+                esp_err_t cerr = httpd_resp_send_chunk(req, vbuf, vused);
+                if (cerr != ESP_OK) {
+                    ESP_LOGE(TAG, "vi chunk send fail 0x%x", (int)cerr);
                     s_busy_msgs = false;
                     return ESP_FAIL;
                 }

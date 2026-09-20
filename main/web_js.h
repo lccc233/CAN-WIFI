@@ -588,7 +588,7 @@ function pollMessages() {
         try { processMessages(d); } catch (e) { /* render errors keep polling */ }
       } else {
         document.getElementById('statusDot').className = 'dot off';
-        document.getElementById('statusText').textContent = 'Bad response';
+        document.getElementById('statusText').textContent = 'Bad: ' + s.slice(0, 60);
       }
       pollBusy = false;   // success path always releases the gate
     }, function() {
