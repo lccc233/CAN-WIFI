@@ -5,15 +5,12 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "can_logger.h"
+#include "signal_decode.h"
 
 static const char *TAG = "can_log";
 
 // 目标 PSRAM 缓冲大小。8MB PSRAM 中留出余量给 WiFi/LWIP 等系统堆使用
 #define CAN_LOG_PSRAM_SIZE  (6 * 1024 * 1024)
-
-// 只录制这两个报文 ID（扩展帧）。其他 ID 仅走监控环形缓冲
-#define LOG_ID_MOTOR_DRIVE  0x18FF0182UL  // 10ms：转矩/转速/故障
-#define LOG_ID_BUS_VI       0x18FF0282UL  // 50ms：母线电流/电压
 
 typedef struct {
     can_msg_entry_t *base;      // PSRAM 缓冲指针
@@ -125,6 +122,14 @@ esp_err_t can_log_clear(void)
     return ESP_OK;
 }
 
+bool can_log_is_recording(void)
+{
+    xSemaphoreTake(s_log.mutex, portMAX_DELAY);
+    bool r = s_log.recording;
+    xSemaphoreGive(s_log.mutex);
+    return r;
+}
+
 void can_log_get_status(can_log_status_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -165,11 +170,9 @@ void can_log_write(const can_msg_entry_t *entry)
     if (!s_log.recording) return;
 
     // 只录制目标报文 ID，其余直接忽略
-    if (entry->id != LOG_ID_MOTOR_DRIVE && entry->id != LOG_ID_BUS_VI) return;
+    if (entry->id != SIG_ID_MOTOR_DRIVE && entry->id != SIG_ID_BUS_VI) return;
 
-    // 快路径：未满则写入
-    // 这里不加锁——recording/count 由 RX 任务单写者访问，
-    // 读侧（status/export）通过 mutex + count 快照保证一致性
+    // 快路径：未满则写入（单写者无锁；count 后置保证读侧快照一致性）
     uint32_t idx = s_log.count;
     if (idx < s_log.capacity) {
         s_log.base[idx] = *entry;
@@ -177,9 +180,13 @@ void can_log_write(const can_msg_entry_t *entry)
         return;
     }
 
-    // 录满：自动停止
-    s_log.recording = false;
-    s_log.stop_ms = now_ms();
-    s_log.dropped++;
-    ESP_LOGW(TAG, "Buffer full, recording stopped (count=%u)", (unsigned)s_log.count);
+    // 录满：走 mutex 明确终止（A4：停止状态机由锁保护，避免与读侧竞态）
+    xSemaphoreTake(s_log.mutex, portMAX_DELAY);
+    if (s_log.recording) {
+        s_log.recording = false;
+        s_log.stop_ms = now_ms();
+        s_log.dropped++;
+        ESP_LOGW(TAG, "Buffer full, recording stopped (count=%u)", (unsigned)s_log.count);
+    }
+    xSemaphoreGive(s_log.mutex);
 }

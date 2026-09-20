@@ -72,8 +72,23 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 （0x18FF0182 行填转矩/转速/故障，0x18FF0282 行填电流/电压，电流/电压为物理值一位小数）
 
 ### 容量
-两报文合计 120 帧/秒：6MB ÷ 20B ≈ 31 万条 ≈ **44 分钟**。如需更长可将
-`can_msg_entry_t`（20B）压缩为 `ts4+tag1+data8+flag1 =14B`（约 63 分钟），未实施。
+两报文合计 120 帧/秒：6MB ÷ **18B** ≈ 37 万条 ≈ **52 分钟**（9-20 优化：`can_msg_entry_t`
+packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩（ts4+tag1+data8+flag1=14B，
+约 67 分钟），未实施。
+
+### 内部优化记录 (2026-09-20 第二批)
+- **A1**：`can_rx_task` 写监控环形缓冲改为持锁（原与 clear 竞态）
+- **A2**：录制中拒绝 `/api/rec/clear`（防导出数据集被覆盖），新增 `can_log_is_recording()`
+- **A3**：`/api/time` tz 钳位 ±840；**A4**：录制缓冲录满停止走 mutex
+- **B1**：`can_msg_entry_t` 18 字节（见上）；**B3**：TWAI 告警日志 1s 去抖；
+  **B4**：`LOG_DEFAULT_LEVEL_INFO` + 无颜色（需删 sdkconfig 重建生效）
+- **C1**：httpd stack 12KB，`/api/messages` vi 数组 2KB 攒发（syscall ÷10）；
+  **C2**：`Cache-Control: no-store`；**C3**：poll 忙闸（并发第二请求回 `{"busy":1}`，
+  前端静默跳过）；**C4**：`WIFI_PS_NONE`
+- **D1**：`web_page.h` 拆为 `web_head.h / web_body.h / web_js.h`，
+  `web_page.h` 仅剩拼接宏 `#define INDEX_HTML PAGE_HEAD PAGE_BODY PAGE_JS`
+- **D2**：`/api/send` 改 cJSON 解析（cjson 组件加入 REQUIRES，行为兼容旧字段）；
+  **D3**：web_server 常量集中顶部；**D4**：sig_decode 加 `assert(dlc<=8)`
 
 ### 网页接口
 - `/api/messages` 增加 `rec:{on,cnt,cap,drop,ms,psram}` 和 `vi:[{t,c,v,f}]`
@@ -137,7 +152,8 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 | `main/wifi.c` | WiFi SoftAP 发布、客户端计数、mDNS |
 | `main/led.c` | WS2812 状态灯（无客户端=红，有客户端=炫彩） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/send /api/clear /api/rec/* /api/export |
-| `main/web_page.h` | 嵌入式 HTML/CSS/JS 网页（监控表 + 双 Y 轴电压电流曲线 + 录制控制） |
+| `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_JS） |
+| `main/web_head.h` / `web_body.h` / `web_js.h` | 页面三段源：头/样式+水印、DOM、脚本 |
 | `main/main.c` | 入口：NVS → WiFi → CAN → **can_log_init →** HTTP Server → LED |
 | `CMakeLists.txt`（顶层） | `set(COMPONENTS main esp_psram)` — esp_psram 必须显式列出 |
 | `sdkconfig.defaults` | PSRAM(OCT/80M) + Flash(DIO/80M/16MB) 的 kconfig 默认值 |

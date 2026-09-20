@@ -12,3 +12,7 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 # Allocate WiFi/LWIP buffers from PSRAM first
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# ---- Logging: default INFO, no ANSI colors ----
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# CONFIG_LOG_COLORS is not set

@@ -5,6 +5,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "cJSON.h"
 #include "can.h"
 #include "can_logger.h"
 #include "signal_decode.h"
@@ -14,6 +15,17 @@
 
 static const char *TAG = "web";
 static httpd_handle_t s_server = NULL;
+
+// ---- 集中常量（D3） ----
+#define HTTP_TASK_STACK_SIZE    12288   // /api/messages 局部 snapshot+freq+vbuf 较大
+#define VI_JSON_MAX_POINTS      400     // 单次响应最多返回的曲线点数
+#define VI_BATCH_STR            2048    // vi 行攒发缓冲大小
+#define EXPORT_READ_BATCH       64      // 导出每批读取条数
+#define EXPORT_FLUSH_INTERVAL_MS 10     // 每批发送间隔（让出 CPU 给 RX/其他连接）
+#define EXPORT_LINE_BUF         4096
+
+// /api/messages 忙闸：同一时刻只处理一个 poll 请求，后续请求快速返回 busy
+static volatile bool s_busy_msgs = false;
 
 // GET / — 返回 HTML 页面
 static esp_err_t root_handler(httpd_req_t *req)
@@ -26,6 +38,16 @@ static esp_err_t root_handler(httpd_req_t *req)
 // GET /api/messages — 返回 CAN 消息 JSON
 static esp_err_t api_messages_handler(httpd_req_t *req)
 {
+    // C3 忙闸：已有 poll 在处理中时快速返回，让客户端沿用本地数据，
+    // 避免慢网下请求堆积。正常单客户端轮询永不触发。
+    if (s_busy_msgs) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        httpd_resp_sendstr(req, "{\"busy\":1}");
+        return ESP_OK;
+    }
+    s_busy_msgs = true;
+
     can_msg_entry_t snapshot[CAN_RX_RING_SIZE];
     uint32_t count, total;
     can_get_snapshot(snapshot, CAN_RX_RING_SIZE, &count, &total);
@@ -34,6 +56,7 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     int freq_count = can_get_id_freqs(freqs, CAN_FREQ_MAX_IDS);
 
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
     // 授时状态：前端据此把 t(开机ms) 换算为真实时间并本地格式化
     uint32_t now_boot = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -94,30 +117,64 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     }
 
     // 电压/电流曲线数据（0x18FF0282 解码值，t=ms, c=电流A*10, v=电压V*10, f=电流哨兵故障）
-    // 逐点锁读取：无跨请求共享缓冲，并发请求安全
-    int vi_total = sig_vi_count();
-    if (vi_total > 400) vi_total = 400;
-    httpd_resp_sendstr_chunk(req, "],\"vi\":[");
-    for (int i = vi_total - 1; i >= 0; i--) {
-        sig_vi_point_t vp;
-        if (!sig_vi_get_back(i, &vp)) continue;
-        // i==vi_total-1 是最旧一条（第一个输出），不加前导逗号
-        char entry[96];
-        snprintf(entry, sizeof(entry), "%s{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d}",
-                 (i == vi_total - 1) ? "" : ",",
-                 (unsigned long)vp.t,
-                 (int)vp.current_x10,
-                 (unsigned long)vp.voltage_x10,
-                 (int)vp.fault);
-        httpd_resp_sendstr_chunk(req, entry);
+    // C1：攒批发送（本地缓冲，无跨请求共享问题），syscall 数从 400+ 降到 ~10
+    {
+        char vbuf[VI_BATCH_STR];
+        size_t vused = 0;
+        int vi_total = sig_vi_count();
+        if (vi_total > VI_JSON_MAX_POINTS) vi_total = VI_JSON_MAX_POINTS;
+        httpd_resp_sendstr_chunk(req, "],\"vi\":[");
+        for (int i = vi_total - 1; i >= 0; i--) {
+            sig_vi_point_t vp;
+            if (!sig_vi_get_back(i, &vp)) continue;
+            // i==vi_total-1 是最旧一条（第一个输出），不加前导逗号
+            int n = snprintf(vbuf + vused, sizeof(vbuf) - vused,
+                     "%s{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d}",
+                     (i == vi_total - 1) ? "" : ",",
+                     (unsigned long)vp.t,
+                     (int)vp.current_x10,
+                     (unsigned long)vp.voltage_x10,
+                     (int)vp.fault);
+            if (n < 0 || (size_t)n >= sizeof(vbuf) - vused) {
+                // 缓冲将满：刷出已攒部分后重写该点
+                if (httpd_resp_send_chunk(req, vbuf, vused) != ESP_OK) {
+                    s_busy_msgs = false;
+                    return ESP_FAIL;
+                }
+                vused = 0;
+                n = snprintf(vbuf, sizeof(vbuf) - vused, "{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d}",
+                     (unsigned long)vp.t,
+                     (int)vp.current_x10,
+                     (unsigned long)vp.voltage_x10,
+                     (int)vp.fault);
+            }
+            vused += n;
+
+            if (vused > sizeof(vbuf) / 2) {
+                if (httpd_resp_send_chunk(req, vbuf, vused) != ESP_OK) {
+                    s_busy_msgs = false;
+                    return ESP_FAIL;
+                }
+                vused = 0;
+            }
+        }
+        if (vused > 0) {
+            if (httpd_resp_send_chunk(req, vbuf, vused) != ESP_OK) {
+                s_busy_msgs = false;
+                return ESP_FAIL;
+            }
+        }
     }
 
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
+    s_busy_msgs = false;
     return ESP_OK;
 }
 
 // POST /api/send — 发送 CAN 帧
+// D2：改用 cJSON 解析（IDF 内置），比手写 strstr 更健壮；
+// 兼容旧语义：id 可为 "0x7E0" 或数字，data 为空格分隔 hex 字符串
 static esp_err_t api_send_handler(httpd_req_t *req)
 {
     char body[256];
@@ -128,50 +185,35 @@ static esp_err_t api_send_handler(httpd_req_t *req)
     }
     body[len] = '\0';
 
-    uint32_t id = 0;
-    uint8_t dlc = 0;
-    bool extended = false;
-    uint8_t data[8] = {0};
-
-    // 解析 "id"
-    char *p = strstr(body, "\"id\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) {
-            p++;
-            while (*p == ' ' || *p == '"') p++;
-            id = strtoul(p, NULL, 0);
-        }
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad JSON");
+        return ESP_FAIL;
     }
+    cJSON *jid = cJSON_GetObjectItem(root, "id");
+    cJSON *jdlc = cJSON_GetObjectItem(root, "dlc");
+    cJSON *jext = cJSON_GetObjectItem(root, "extended");
+    cJSON *jdata = cJSON_GetObjectItem(root, "data");
 
-    // 解析 "dlc"
-    p = strstr(body, "\"dlc\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) dlc = atoi(p + 1);
-    }
+    uint32_t id = jid ? (cJSON_IsString(jid)
+                        ? (uint32_t)strtoul(jid->valuestring, NULL, 0)
+                        : (uint32_t)jid->valueint) : 0;
+    uint8_t dlc = jdlc && jdlc->valueint >= 0 ? (uint8_t)jdlc->valueint : 0;
     if (dlc > 8) dlc = 8;
+    bool extended = cJSON_IsBool(jext) && cJSON_IsTrue(jext);
 
-    // 解析 "extended"
-    p = strstr(body, "\"extended\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p && strstr(p, "true")) extended = true;
-    }
-
-    // 解析 "data" — hex 字节
-    p = strstr(body, "\"data\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) {
-            p++;
-            while (*p == ' ' || *p == '"') p++;
-            for (int i = 0; i < dlc && i < 8; i++) {
-                data[i] = (uint8_t)strtoul(p, &p, 16);
-                while (*p == ' ') p++;
-            }
+    uint8_t data[8] = {0};
+    if (cJSON_IsString(jdata) && jdata->valuestring) {
+        // 逐个 hex token 解析（容忍多空格，忽略引号边界）
+        const char *pc = jdata->valuestring;
+        for (int i = 0; i < dlc && i < 8 && *pc; i++) {
+            data[i] = (uint8_t)strtoul(pc, (char **)&pc, 16);
+            while (*pc == ' ') pc++;
         }
+    } else {
+        // 无 data 字段（如 dlc==0）：保持 0
     }
+    cJSON_Delete(root);
 
     if (id == 0 && dlc == 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid message");
@@ -227,8 +269,10 @@ static esp_err_t api_time_handler(httpd_req_t *req)
     if (p) {
         p = strchr(p, ':');
         if (p) tz_min = atoi(p + 1);
-        // 浏览器 getTimezoneOffset 东区为负（中国 -480），按原样使用
     }
+    // A3：钳位到 ±14h，防异常值产生怪时间
+    if (tz_min < -840) tz_min = -840;
+    if (tz_min > 840) tz_min = 840;
 
     // 合理性：Unix 时刻应在 2000-01-01 ~ 2100-01-01 之间
     if (epoch_ms < 946684800000LL || epoch_ms > 4102444800000LL) {
@@ -265,9 +309,14 @@ static esp_err_t api_rec_stop_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// POST /api/rec/clear — 清空录制数据
+// POST /api/rec/clear — 清空录制数据（A2：录制进行中拒绝，防导出数据被覆盖）
 static esp_err_t api_rec_clear_handler(httpd_req_t *req)
 {
+    if (can_log_is_recording()) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"stop recording first\"}");
+        return ESP_OK;
+    }
     can_log_clear();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -302,6 +351,7 @@ static esp_err_t api_export_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Content-Disposition",
                        "attachment; filename=\"can_log.csv\"");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
     // CSV 表头（0x18FF0182 填转矩/转速/故障列，0x18FF0282 填电流/电压列）
     // time 列：已授时为 "2026-09-20 14:35:01.123"，未授时为 "boot+H:MM:SS.mmm"
@@ -309,12 +359,9 @@ static esp_err_t api_export_handler(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req,
         "no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V\r\n");
 
-    // 分块读取 + 行缓冲攒批发送，减少系统调用次数
-    // 每行最长约 64 字节，4KB 缓冲可攒 ~60 行
-    static const uint32_t READ_BATCH = 64;
-    static const uint32_t READ_INTERVAL_MS = 10;
-    can_msg_entry_t buf[READ_BATCH];
-    char line[4 * 1024];
+    // C1：分批读取 + 行缓冲攒批发送，减少 syscall 与网络小包
+    can_msg_entry_t buf[EXPORT_READ_BATCH];
+    char line[EXPORT_LINE_BUF];
     size_t used = 0;
     uint32_t sent = 0;
     uint32_t seq = 0;
@@ -324,7 +371,7 @@ static esp_err_t api_export_handler(httpd_req_t *req)
         // 分批拷贝：写入方（RX 任务）会后写 count，条数 <= count 的环形
         // 位置必然已写完，无需锁；批量 memcpy 到内部缓冲再逐行格式化
         uint32_t to_read = st.count - sent;
-        if (to_read > READ_BATCH) to_read = READ_BATCH;
+        if (to_read > EXPORT_READ_BATCH) to_read = EXPORT_READ_BATCH;
         memcpy(buf, &base[sent], to_read * sizeof(can_msg_entry_t));
 
         for (uint32_t i = 0; i < to_read; i++) {
@@ -388,7 +435,7 @@ static esp_err_t api_export_handler(httpd_req_t *req)
                     return ESP_FAIL; // 客户端断开
                 }
                 used = 0;
-                vTaskDelay(pdMS_TO_TICKS(READ_INTERVAL_MS));
+                vTaskDelay(pdMS_TO_TICKS(EXPORT_FLUSH_INTERVAL_MS));
             }
         }
         sent += to_read;
@@ -409,7 +456,7 @@ esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 12;
-    config.stack_size = 8192;
+    config.stack_size = HTTP_TASK_STACK_SIZE;
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {

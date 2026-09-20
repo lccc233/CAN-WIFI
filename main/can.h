@@ -15,13 +15,15 @@
 // 频率统计最多跟踪的 ID 数量
 #define CAN_FREQ_MAX_IDS  128
 
-// 单条 CAN 消息记录
-typedef struct {
+// 单条 CAN 消息记录。
+// packed 消除对齐 padding：20B -> 18B（PSRAM 容量 +18%）。
+// u32 字段落位恰在 0/4 偏移（data 后无补位），无未对齐内存访问 penalty。
+typedef struct __attribute__((packed)) {
     uint32_t timestamp_ms;
     uint32_t id;
-    uint8_t  dlc;
     uint8_t  data[8];
-    bool     extended;
+    uint8_t  dlc;
+    uint8_t  extended;   // 原 bool；1=扩展帧，0=标准帧
 } can_msg_entry_t;
 
 // 环形缓冲

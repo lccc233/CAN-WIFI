@@ -165,6 +165,7 @@ static void can_rx_task(void *arg)
     while (1) {
         if (twai_receive(&rx_msg, pdMS_TO_TICKS(100)) == ESP_OK) {
             uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
             uint32_t idx = g_ring.head & (CAN_RX_RING_SIZE - 1);
             g_ring.entries[idx].timestamp_ms = now_ms;
             g_ring.entries[idx].id = rx_msg.identifier;
@@ -173,10 +174,10 @@ static void can_rx_task(void *arg)
             memset(g_ring.entries[idx].data, 0, 8);
             memcpy(g_ring.entries[idx].data, rx_msg.data, rx_msg.data_length_code);
             g_ring.head++;
-            g_ring.count++;
+            g_ring.count = g_ring.head;
+            xSemaphoreGive(g_ring.mutex);
             can_freq_record(rx_msg.identifier, now_ms);
             can_log_write(&g_ring.entries[idx]);
-
             // 实时电压/电流显示缓冲（曲线页数据源）
             if (g_ring.entries[idx].id == SIG_ID_BUS_VI) {
                 sig_bus_vi_t vi;
@@ -191,6 +192,18 @@ static void can_rx_task(void *arg)
 
 // ---- TWAI 告警处理任务 ----
 
+// 告警日志去抖：同一 alert 位（bit0-31）在 1 秒窗口内只打印一次，
+// 防止总线上高噪声时日志刷屏占用 CPU。恢复动作本身不受去抖影响。
+static bool can_alert_log_ok(int bit)
+{
+    static uint32_t s_last_ms[32];
+    if (bit < 0 || bit > 31) return true;
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    bool ok = (now - s_last_ms[bit]) >= 1000;
+    if (ok) s_last_ms[bit] = now;
+    return ok;
+}
+
 static void can_alert_task(void *arg)
 {
     ESP_LOGI(TAG, "TWAI alert task started");
@@ -199,11 +212,15 @@ static void can_alert_task(void *arg)
         esp_err_t ret = twai_read_alerts(&alerts, pdMS_TO_TICKS(500));
         if (ret == ESP_OK && alerts != 0) {
             if (alerts & TWAI_ALERT_BUS_OFF) {
-                ESP_LOGW(TAG, "BUS-OFF detected! Initiating recovery...");
+                if (can_alert_log_ok(__builtin_ffs(TWAI_ALERT_BUS_OFF) - 1)) {
+                    ESP_LOGW(TAG, "BUS-OFF detected! Initiating recovery...");
+                }
                 twai_initiate_recovery();
             }
             if (alerts & TWAI_ALERT_RECOVERY_IN_PROGRESS) {
-                ESP_LOGI(TAG, "Bus-off recovery in progress...");
+                if (can_alert_log_ok(__builtin_ffs(TWAI_ALERT_RECOVERY_IN_PROGRESS) - 1)) {
+                    ESP_LOGI(TAG, "Bus-off recovery in progress...");
+                }
             }
             if (alerts & TWAI_ALERT_BUS_RECOVERED) {
                 ESP_LOGI(TAG, "Bus recovered! Restarting...");
@@ -211,16 +228,24 @@ static void can_alert_task(void *arg)
                 twai_print_status();
             }
             if (alerts & TWAI_ALERT_ABOVE_ERR_WARN) {
-                ESP_LOGW(TAG, "Error-warning level exceeded");
+                if (can_alert_log_ok(__builtin_ffs(TWAI_ALERT_ABOVE_ERR_WARN) - 1)) {
+                    ESP_LOGW(TAG, "Error-warning level exceeded");
+                }
             }
             if (alerts & TWAI_ALERT_ERR_PASS) {
-                ESP_LOGW(TAG, "Entered error-passive state");
+                if (can_alert_log_ok(__builtin_ffs(TWAI_ALERT_ERR_PASS) - 1)) {
+                    ESP_LOGW(TAG, "Entered error-passive state");
+                }
             }
             if (alerts & TWAI_ALERT_BUS_ERROR) {
-                ESP_LOGW(TAG, "Bus error detected");
+                if (can_alert_log_ok(__builtin_ffs(TWAI_ALERT_BUS_ERROR) - 1)) {
+                    ESP_LOGW(TAG, "Bus error detected");
+                }
             }
             if (alerts & TWAI_ALERT_TX_FAILED) {
-                ESP_LOGW(TAG, "TX failed");
+                if (can_alert_log_ok(__builtin_ffs(TWAI_ALERT_TX_FAILED) - 1)) {
+                    ESP_LOGW(TAG, "TX failed");
+                }
             }
         }
     }

@@ -44,7 +44,8 @@ idf.py -p <COM口> build flash monitor
 
 PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz / 16MB），
 不要手动改 `sdkconfig`——**手工插入的配置块会被构建系统重写丢弃**（见 HANDOFF）。
-烧录走 **UART 模式**：USB 口本身暴露 COM 口（如 COM6），用 esptool 直接烧录，无需 OpenOCD。
+烧录走 **UART 模式**：USB 口本身暴露 COM 口，端口号以设备管理器/`idf.py` 枚举为准
+（历史配置为 COM6，拔插可能变化），用 esptool 直接烧录，无需 OpenOCD。
 
 > **改了目录名或移动过项目？** 先删掉 `build/` 再构建。CMakeCache 会写死项目绝对路径，
 > 沿用旧 `build/` 会报 `CMAKE_C_COMPILER not found`。
@@ -116,7 +117,8 @@ main/
 ├── wifi.c / wifi.h    # WiFi SoftAP + mDNS + 客户端计数
 ├── led.c / led.h      # WS2812 状态灯（红=无客户端，炫彩=有客户端）
 ├── web_server.c       # HTTP 服务与 JSON API / CSV 导出
-└── web_page.h         # 前端页面（内嵌 HTML/CSS/JS：监控表 + 电压电流双 Y 轴曲线）
+├── web_page.h         # 页面组装宏（拼接 web_head/web_body/web_js 三段源文件）
+└── web_head.h web_body.h web_js.h   # 前端页面源（HTML 头+样式 / DOM / JS）
 
 sdkconfig.defaults # kconfig 默认值（PSRAM/Flash），改配置改这里，不要手改 sdkconfig
 ```

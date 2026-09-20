@@ -71,6 +71,9 @@ esp_err_t wifi_init_softap(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    // C4：SoftAP 模式下 Modem Sleep 无意义，显式关闭避免驱动默认值变化导致延迟
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     s_ap_ready = true;
     ESP_LOGI(TAG, "SoftAP started: SSID=\"%s\" IP=192.168.4.1",
              WIFI_SSID);

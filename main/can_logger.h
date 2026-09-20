@@ -31,6 +31,9 @@ esp_err_t can_log_clear(void);
 // 查询录制状态
 void can_log_get_status(can_log_status_t *out);
 
+// 是否正在录制（供 /api/rec/clear 守卫）
+bool can_log_is_recording(void);
+
 // 获取录制缓冲区基址及当前条数（供导出模块直接分块读取）
 // 注意：count 是动态快照，录制仍在进行时会持续增长
 esp_err_t can_log_get_buffer(can_msg_entry_t **base, uint32_t *count);

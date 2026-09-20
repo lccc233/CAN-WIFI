@@ -1,4 +1,5 @@
 #include <string.h>
+#include <assert.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "signal_decode.h"
@@ -15,6 +16,7 @@ static uint16_t sig_rd16(const uint8_t *data)
 
 void sig_decode_motor(const uint8_t *data, uint8_t dlc, sig_motor_t *out)
 {
+    assert(dlc <= 8);  // TWAI 驱动保证，防回归
     memset(out, 0, sizeof(*out));
     if (dlc < 8) return;  // 故障等级在 byte7，长度不足整体无效
 
@@ -29,6 +31,7 @@ void sig_decode_motor(const uint8_t *data, uint8_t dlc, sig_motor_t *out)
 
 void sig_decode_bus_vi(const uint8_t *data, uint8_t dlc, sig_bus_vi_t *out)
 {
+    assert(dlc <= 8);  // TWAI 驱动保证，防回归
     memset(out, 0, sizeof(*out));
     if (dlc < 4) return;
 
