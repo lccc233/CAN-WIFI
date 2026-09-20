@@ -2,7 +2,6 @@
 
 // 页头 <head> 到 <body>：含 base64 水印图 line 过长，单独成文件
 #define PAGE_HEAD R"rawliteral(
-static const char INDEX_HTML[] = R"rawliteral(
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
