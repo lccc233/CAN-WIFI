@@ -42,7 +42,8 @@
     <div class="detail-header">
       <span>ID:</span><span class="id-label" id="detailId"></span>
       <span id="detailCount" class="msg-count"></span>
-      <!-- 表格视图 -->
+    </div>
+    <!-- 表格视图 -->
     <div id="tableView">
       <table>
         <thead>
