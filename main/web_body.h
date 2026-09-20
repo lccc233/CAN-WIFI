@@ -72,11 +72,12 @@
     </div>
   </div>
 
-  <div class="send-panel">
-    <div class="send-row hidden" id="backRow">
-      <button class="btn back" id="backBtn">&larr; Back to List</button>
-      <span class="msg-count" id="detailIdLabel"></span>
-    </div>
+  <div class="send-panel hidden" id="backRow">
+    <button class="btn back" id="backBtn">&larr; Back to List</button>
+    <span class="msg-count" id="detailIdLabel"></span>
+  </div>
+
+  <div class="send-panel" id="sendPanel">
     <div class="send-row">
       <label>ID:</label>
       <input type="text" class="input-field" id="sendId" placeholder="0x7E8" value="0x7E0">

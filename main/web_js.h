@@ -15,6 +15,7 @@ var autoScrollDetail = true;
 var contentMain = document.getElementById('viewMain');
 var contentDetail = document.getElementById('viewDetail');
 var contentVI = document.getElementById('viewVI');
+var sendPanel = document.getElementById('sendPanel');
 
 // ===== 授时状态（来自 /api/messages 的 clk 字段） =====
 var clkSync = false;   // 设备是否已授时
@@ -144,6 +145,7 @@ function showDetail(id) {
   document.getElementById('detailIdLabel').textContent = id;
   document.getElementById('headerTitle').textContent = 'CAN Detail';
   document.getElementById('backRow').classList.remove('hidden');
+  sendPanel.classList.add('hidden');
   renderDetailTable();
 }
 
@@ -153,6 +155,7 @@ function showMain() {
   contentDetail.classList.add('hidden');
   contentVI.classList.add('hidden');
   contentMain.classList.remove('hidden');
+  sendPanel.classList.remove('hidden');
   document.getElementById('headerTitle').textContent = 'CAN Bus Monitor';
   document.getElementById('backRow').classList.add('hidden');
   renderMain();
@@ -300,6 +303,7 @@ function showVI() {
   contentVI.classList.remove('hidden');
   document.getElementById('headerTitle').textContent = 'Bus Voltage / Current';
   document.getElementById('backRow').classList.add('hidden');
+  sendPanel.classList.add('hidden');
   drawVI();
 }
 
