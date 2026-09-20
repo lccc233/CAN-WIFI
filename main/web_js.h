@@ -328,7 +328,8 @@ document.getElementById('tabVI').addEventListener('click', showVI);
 var chartResizeTimer = null;
 window.addEventListener('resize', function() {
   clearTimeout(chartResizeTimer);
-  chartResizeTimer = setTimeout(function() {if (currentView === 'vi') drawVI();
+  chartResizeTimer = setTimeout(function() {
+    if (currentView === 'vi') drawVI();
   }, 150);
 });
 
