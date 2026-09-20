@@ -80,7 +80,7 @@ function groupById(messages) {
 
 function renderMain() {
   var groups = groupById(allMessages);
-  var ids = Object.keys(groups).sort().reverse();
+  var ids = Object.keys(groups).sort(function(a, b) { return parseInt(a.slice(2), 16) - parseInt(b.slice(2), 16); });
   var freqMap = {};
   for (var i = 0; i < allFreqs.length; i++) freqMap[allFreqs[i].id] = allFreqs[i].f;
   var tbody = document.getElementById('mainBody');
