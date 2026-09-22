@@ -12,8 +12,8 @@
 // 注意：IP 必须与路由器同网段、且在 DHCP 自动分配池之外（一般选 .2xx 段）。
 // 网段配错设备将不可达——把开关改回 0 重烧，或改成正确网段。
 #define WIFI_STA_STATIC_IP   1
-#define WIFI_STA_IP          "192.168.1.250"
-#define WIFI_STA_GATEWAY     "192.168.1.1"
+#define WIFI_STA_IP          "10.31.134.250"
+#define WIFI_STA_GATEWAY     "10.31.134.224"
 #define WIFI_STA_NETMASK     "255.255.255.0"
 
 #define MDNS_HOSTNAME    "can-monitor"
