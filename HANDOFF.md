@@ -216,6 +216,10 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
   RAM 释放 ~14KB；页面只剩一套 Record/导出 CSV（前端记录器）
 - **坑**：删 DOM 元素时必须同步删 JS 里的 `getElementById(...).addEventListener`——
   对 null 调用会抛 TypeError 直接杀死整个脚本（本轮 recBtn/tabVI/exportBtn 三处）
+- **坑**：删某个视图（contentVI）时，showMain/showDetail 里对应的
+  `contentVI.classList.add('hidden')` 行会被一并清掉，**必须补上对所有剩余视图的
+  隐藏**——否则从另一视图返回时该视图残留在屏幕下方（2026-09-22 实际踩坑，
+  修复：三处视图切换函数对称互斥隐藏）
 
 ## 关键代码位置
 | 文件 | 说明 |

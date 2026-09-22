@@ -149,6 +149,7 @@ function showDetail(id) {
   currentView = 'detail';
   setTopTab(null);
   contentMain.classList.add('hidden');
+  contentCharts.classList.add('hidden');
   contentDetail.classList.remove('hidden');
   document.getElementById('detailId').textContent = id;
   document.getElementById('detailIdLabel').textContent = id;
@@ -163,6 +164,7 @@ function showMain() {
   currentView = 'main';
   setTopTab('tabMonitor');
   contentDetail.classList.add('hidden');
+  contentCharts.classList.add('hidden');
   contentMain.classList.remove('hidden');
   sendPanel.classList.remove('hidden');
   document.getElementById('headerTitle').textContent = 'CAN Bus Monitor';
