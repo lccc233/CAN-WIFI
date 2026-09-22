@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_mac.h"
+#include "lwip/ip4_addr.h"
 #include "mdns.h"
 #include "wifi.h"
 
@@ -43,10 +44,10 @@ bool wifi_is_connected(void)
     return s_sta_got_ip;
 }
 
-// STA 模式：连接现有 WiFi 路由器（IP 由 DHCP 分配）
+// STA 模式：连接现有 WiFi 路由器（IP 由 DHCP 或 wifi.h 静态配置决定）
 esp_err_t wifi_init_sta(void)
 {
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -55,6 +56,28 @@ esp_err_t wifi_init_sta(void)
         WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+#if WIFI_STA_STATIC_IP
+    // 固定 IP：在启动前停 DHCP 并写入静态地址（网段配错设备将不可达，
+    // 把 wifi.h 的 WIFI_STA_STATIC_IP 改回 0 重烧即可退回 DHCP）
+    {
+        ip4_addr_t ip, gw, mask;
+        if (ip4addr_aton(WIFI_STA_IP, &ip) &&
+            ip4addr_aton(WIFI_STA_GATEWAY, &gw) &&
+            ip4addr_aton(WIFI_STA_NETMASK, &mask)) {
+            esp_netif_ip_info_t info = {0};
+            info.ip.addr = ip.addr;
+            info.gw.addr = gw.addr;
+            info.netmask.addr = mask.addr;
+            ESP_ERROR_CHECK(esp_netif_dhcpc_stop(sta_netif));
+            ESP_ERROR_CHECK(esp_netif_set_ip_info(sta_netif, &info));
+            ESP_LOGI(TAG, "Static IP: %s (gw %s)", WIFI_STA_IP, WIFI_STA_GATEWAY);
+        } else {
+            ESP_LOGE(TAG, "Bad static IP config \"%s\", falling back to DHCP",
+                     WIFI_STA_IP);
+        }
+    }
+#endif
 
     wifi_config_t wifi_config = {
         .sta = {

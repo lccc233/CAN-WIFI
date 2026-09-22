@@ -45,7 +45,7 @@ void app_main(void)
     ESP_LOGI(TAG, "=============================================");
     ESP_LOGI(TAG, "  CAN Bus Monitor Ready!");
     ESP_LOGI(TAG, "  WiFi STA: connecting to \"%s\"", WIFI_STA_SSID);
-    ESP_LOGI(TAG, "  Web:  http://%s.local (IP 见上方日志或路由器后台)", MDNS_HOSTNAME);
+    ESP_LOGI(TAG, "  Web:  http://%s.local (IP 见启动日志 / wifi.h 静态配置)", MDNS_HOSTNAME);
     ESP_LOGI(TAG, "=============================================");
 
     // 空闲 — 所有工作在 FreeRTOS 任务中完成

@@ -29,8 +29,9 @@
   - 浏览器直接访问 `http://<设备IP>/api/export` 下载物理值 CSV：
     `no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
   - 日常使用建议用**自定义曲线页的前端记录器**（记录已配置信号的解码值，导出宽表 CSV）
-- **WiFi STA**：连接现有路由器 `lc`（密码 `12345678`），IP 由路由器 DHCP 分配
-  （启动日志打印 IP；`can-monitor.local` 也可访问）
+- **WiFi STA**：连接现有路由器 `lc`（密码 `12345678`）；**固定 IP `192.168.1.250`**
+  （`wifi.h` 里 `WIFI_STA_STATIC_IP/IP/GATEWAY/NETMASK` 可改，开关置 0 则退回 DHCP），
+  `can-monitor.local` 也可访问
 - **状态灯**（WS2812，GPIO48）：**未连上路由器 → 红灯常亮；连上（拿到 IP）→ 炫彩**（色相循环）
 
 ## 硬件
@@ -71,8 +72,9 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 
 1. 手机/电脑连接 WiFi 路由器 **`lc`**（密码 `12345678`），设备上电后自动加入同一热点
    - **注意**：`CONFIG_SPIRAM_MEMTEST=y` 会让上电慢几秒（PSRAM 内存测试），正常
-   - 设备 IP 在启动串口日志（`Got IP: x.x.x.x`）或路由器后台查看
-2. 浏览器打开 `http://<设备IP>` 或 `http://can-monitor.local`
+   - 设备固定 IP 默认 **`192.168.1.250`**（`wifi.h` 里可改 IP/网关/掩码，或
+     `WIFI_STA_STATIC_IP` 改 0 退回 DHCP 自动分配）
+2. 浏览器打开 `http://<设备IP>`（默认 `http://192.168.1.250`）或 `http://can-monitor.local`
 3. 在底部发送区填写 ID / DLC / Data 即可向总线发送 CAN 帧（该发送面板只在 CAN Monitor 页显示）
 4. **看报表**：点主表格里任意一行 → 该 ID 的原始报文历史表，左上 Back to List 返回
 5. **自定义曲线**：详情页「+ 添加曲线」定义信号
