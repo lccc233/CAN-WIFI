@@ -221,6 +221,24 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
   隐藏**——否则从另一视图返回时该视图残留在屏幕下方（2026-09-22 实际踩坑，
   修复：三处视图切换函数对称互斥隐藏）
 
+## 配置持久化：NVS + 导入 (2026-09-22 第四轮)
+
+- **动机**：信号定义原先只存浏览器 localStorage——换手机/清浏览器数据/iOS Safari
+  7 天不访问都会丢，且导出的 JSON 没法恢复
+- **设备 NVS 存储**：`GET/POST /api/signals`（web_server.c `api_signals_handler`），
+  NVS namespace `webui` key `signals`，存**紧凑 JSON 数组原文**（cJSON 校验后重序列化，
+  上限 3500B ≈ 40 个信号）；`max_uri_handlers 12→13`；单 handler 分支 GET/POST
+- **同步策略**：
+  - 页面每次改配置（saveCfg）→ localStorage 即存 + 500ms 节流 POST 到设备
+  - 页面加载时 GET 设备配置：**设备为准**覆盖本地缓存（内容有变才 toast/重绘）；
+    设备为空（首次/擦除过）→ 把浏览器现有配置迁移上去
+  - 多浏览器并存：**最后保存者生效**（页面只在加载时拉取一次，不实时对账）
+- **导入配置**：自定义曲线页新增 `#cfgImportBtn`（`#cfgImportFile` 隐藏 file input），
+  FileReader 解析 JSON → 校验每项 id（0x hex）/name → 整组替换 → saveCfg 双写
+- **收益**：配置真正断电不丢、换设备不丢（换机后打开页面自动加载设备配置，
+  或用导入 JSON 恢复）；bin 0xEA270 → 0xF09C0，**分区仅剩 6%（63KB）——
+  后续页面改动需优先考虑体积**
+
 ## 关键代码位置
 | 文件 | 说明 |
 |------|------|

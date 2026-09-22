@@ -81,6 +81,8 @@
       <span class="msg-count" id="curveRecStatus"></span>
       <button class="btn" id="csvExportBtn">导出记录CSV</button>
       <button class="btn" id="cfgExportBtn">导出配置</button>
+      <button class="btn" id="cfgImportBtn">导入配置</button>
+      <input type="file" id="cfgImportFile" accept=".json,application/json" class="hidden">
     </div>
     <div class="hint">曲线 = 用信号定义对原始帧实时解码（仅积累打开页面后的数据）；Record 记录已启用信号的解码值，可导出 CSV 离线分析</div>
     <div id="chartList"></div>

@@ -5,6 +5,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "nvs_flash.h"
 #include "cJSON.h"
 #include "can.h"
 #include "can_logger.h"
@@ -122,6 +123,107 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
     s_busy_msgs = false;
+    return ESP_OK;
+}
+
+// GET/POST /api/signals — 自定义曲线信号配置（设备 NVS 持久化，断电不丢）
+// 配置真源在设备：浏览器 localStorage 仅作缓存（页面加载时以设备为准；
+// 设备为空时把浏览器现有配置迁移上去）。多浏览器并存时，最后保存者生效。
+// 存储格式：紧凑 JSON 数组原文（cJSON 校验后重新序列化），上限 ~3500 字节
+#define SIGNALS_NVS_NS     "webui"
+#define SIGNALS_NVS_KEY    "signals"
+#define SIGNALS_MAX_BYTES  3500
+
+static esp_err_t api_signals_handler(httpd_req_t *req)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(SIGNALS_NVS_NS, NVS_READWRITE, &nvs) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS open failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_POST) {
+        // 读完整 body（recv 可能分片）
+        size_t cap = SIGNALS_MAX_BYTES + 1;
+        char *body = malloc(cap);
+        if (!body) {
+            nvs_close(nvs);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No mem");
+            return ESP_FAIL;
+        }
+        int total = 0, recvd;
+        while (total < (int)(cap - 1) &&
+               (recvd = httpd_req_recv(req, body + total, cap - 1 - total)) > 0) {
+            total += recvd;
+        }
+        if (total <= 0) {
+            free(body);
+            nvs_close(nvs);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+            return ESP_FAIL;
+        }
+        body[total] = '\0';
+
+        // 校验为 JSON 数组并转紧凑格式
+        cJSON *root = cJSON_Parse(body);
+        free(body);
+        if (!root || !cJSON_IsArray(root)) {
+            if (root) cJSON_Delete(root);
+            nvs_close(nvs);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad JSON");
+            return ESP_FAIL;
+        }
+        int n = cJSON_GetArraySize(root);
+        char *compact = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        esp_err_t err = ESP_OK;
+        if (!compact || strlen(compact) > SIGNALS_MAX_BYTES) {
+            err = ESP_ERR_INVALID_SIZE;   // 统一走下方报错
+        } else {
+            err = nvs_set_blob(nvs, SIGNALS_NVS_KEY, compact, strlen(compact));
+            if (err == ESP_OK) err = nvs_commit(nvs);
+        }
+        if (compact) free(compact);
+        nvs_close(nvs);
+        if (err != ESP_OK) {
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                err == ESP_ERR_INVALID_SIZE
+                                    ? "{\"ok\":false,\"error\":\"config too large\"}"
+                                    : "{\"ok\":false,\"error\":\"NVS write failed\"}");
+            return ESP_FAIL;
+        }
+        char out[40];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"n\":%d}", n);
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
+    }
+
+    // GET：返回存储的配置数组（未存过或异常时返回空数组）
+    size_t len = 0;
+    if (nvs_get_blob(nvs, SIGNALS_NVS_KEY, NULL, &len) != ESP_OK ||
+        len == 0 || len > SIGNALS_MAX_BYTES) {
+        nvs_close(nvs);
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+    char *buf = malloc(len + 1);
+    if (!buf) {
+        nvs_close(nvs);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No mem");
+        return ESP_FAIL;
+    }
+    esp_err_t err = nvs_get_blob(nvs, SIGNALS_NVS_KEY, buf, &len);
+    nvs_close(nvs);
+    if (err != ESP_OK) {
+        free(buf);
+        httpd_resp_sendstr(req, "[]");
+        return ESP_OK;
+    }
+    buf[len] = '\0';
+    httpd_resp_sendstr(req, buf);
+    free(buf);
     return ESP_OK;
 }
 
@@ -408,7 +510,7 @@ static esp_err_t api_export_handler(httpd_req_t *req)
 esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 13;
     config.stack_size = HTTP_TASK_STACK_SIZE;
 
     esp_err_t ret = httpd_start(&s_server, &config);
@@ -426,6 +528,8 @@ esp_err_t web_server_start(void)
     httpd_uri_t rec_clear = { .uri = "/api/rec/clear", .method = HTTP_POST, .handler = api_rec_clear_handler };
     httpd_uri_t export = { .uri = "/api/export", .method = HTTP_GET, .handler = api_export_handler };
     httpd_uri_t time = { .uri = "/api/time", .method = HTTP_POST, .handler = api_time_handler };
+    httpd_uri_t signals_get = { .uri = "/api/signals", .method = HTTP_GET, .handler = api_signals_handler };
+    httpd_uri_t signals_post = { .uri = "/api/signals", .method = HTTP_POST, .handler = api_signals_handler };
 
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &messages);
@@ -436,6 +540,8 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &rec_clear);
     httpd_register_uri_handler(s_server, &export);
     httpd_register_uri_handler(s_server, &time);
+    httpd_register_uri_handler(s_server, &signals_get);
+    httpd_register_uri_handler(s_server, &signals_post);
 
     ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;

@@ -18,7 +18,8 @@
   - Monitor 主表与详情表中，已配置信号覆盖的**字节按信号颜色高亮**，实时数值随轮询刷新
   - **曲线数据记录器**：Record 记录已启用信号的解码值（每信号上限 20 万点 ≈ 1 小时 @50Hz），
     「导出记录CSV」下载宽表（`no,time_rel_ms,信号(单位)@ID,...`），Excel/Python 可直接离线分析
-  - 信号配置存 **localStorage**（刷新/断电不丢），「导出配置」可备份为 JSON 迷你 DBC
+  - 信号配置**双份持久化**：浏览器 localStorage + **设备 NVS**（断电不丢，换手机打开页面自动从设备拉取；
+    「导出配置」备份为 JSON 迷你 DBC，「导入配置」一键恢复）
   - 限制：浏览器只积累**打开页面之后**的数据（200ms 轮询快照去重）；长期历史用导出 CSV 分析
 - **浏览器授时**：打开页面自动 `POST /api/time` 校准，原始帧备份 CSV（`/api/export`）的 `time` 列为真实时间
   （未授时时回退为开机相对时间 `boot + HH:MM:SS.mmm`）
@@ -119,6 +120,8 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 | `POST /api/rec/start` | 开始 PSRAM 原始帧录制（无页面 UI，curl 备用） |
 | `POST /api/rec/stop` | 停止录制（保留数据） |
 | `POST /api/rec/clear` | 清空录制缓冲 |
+| `GET /api/signals` | 自定义曲线信号配置：返回存储的 JSON 数组（未存过返回 `[]`） |
+| `POST /api/signals` | 保存信号配置到设备 NVS（body 为配置数组，上限 ~3500 字节，响应 `{"ok":true,"n":N}`）；页面每次改动自动保存 |
 | `GET /api/export` | CSV 流式下载全部录制数据（物理值列，time 列已授时为真实时间） |
 
 ## 目录结构

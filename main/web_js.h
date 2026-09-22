@@ -237,8 +237,48 @@ function sigBytesCovered(sig) {
   return set;
 }
 
-// ---- 配置存取（localStorage 持久化，刷新/断电不丢） ----
-function saveCfg() { try { localStorage.setItem(CFG_KEY, JSON.stringify(configs)); } catch (e) {} }
+// ---- 配置存取（localStorage 缓存 + 设备 NVS 双份持久化） ----
+var cfgPushTimer = null;
+function saveCfg() {
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(configs)); } catch (e) {}
+  // 同步到设备 NVS（节流 500ms；离线/失败静默，下次保存自然重试）
+  clearTimeout(cfgPushTimer);
+  cfgPushTimer = setTimeout(pushCfgToDevice, 500);
+}
+function pushCfgToDevice() {
+  fetch('/api/signals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(configs)
+  }).catch(function() {});
+}
+// 页面加载时从设备拉配置（设备为准；设备为空则把本地配置迁移上去）
+function loadCfgFromDevice() {
+  fetch('/api/signals')
+    .then(function(r) { return r.text(); })
+    .then(function(s) {
+      var d = null;
+      try { d = JSON.parse(s); } catch (e) { return; }
+      var arr = Array.isArray(d) ? d : [];
+      if (arr.length) {
+        for (var i = 0; i < arr.length; i++) {
+          if (!arr[i] || !arr[i].id) return;   // 数据不合法，放弃本次拉取
+          arr[i].id = normId(arr[i].id);
+        }
+        var before = localStorage.getItem(CFG_KEY);
+        configs = arr;
+        try { localStorage.setItem(CFG_KEY, JSON.stringify(configs)); } catch (e) {}
+        if (before !== JSON.stringify(configs)) {
+          if (currentView === 'detail') renderSigList();
+          if (currentView === 'charts') { buildChartList(); renderCharts(); }
+          toast('已从设备加载 ' + configs.length + ' 个信号定义');
+        }
+      } else if (configs.length) {
+        pushCfgToDevice();
+      }
+    })
+    .catch(function() {});
+}
 function loadCfg() {
   try {
     var s = localStorage.getItem(CFG_KEY);
@@ -697,6 +737,35 @@ document.getElementById('winSel').addEventListener('change', renderCharts);
 document.getElementById('curveRecBtn').addEventListener('click', curveRecToggle);
 document.getElementById('csvExportBtn').addEventListener('click', curveRecExportCsv);
 document.getElementById('cfgExportBtn').addEventListener('click', exportCfg);
+document.getElementById('cfgImportBtn').addEventListener('click', function() {
+  document.getElementById('cfgImportFile').click();
+});
+document.getElementById('cfgImportFile').addEventListener('change', function() {
+  var f = this.files && this.files[0];
+  this.value = '';
+  if (!f) return;
+  var reader = new FileReader();
+  reader.onload = function() {
+    var arr = null;
+    try { arr = JSON.parse(reader.result); } catch (e) { arr = null; }
+    if (!Array.isArray(arr) || !arr.length) { alert('配置文件无效（应为信号数组）'); return; }
+    for (var i = 0; i < arr.length; i++) {
+      var s = arr[i];
+      if (!s || !/^0x[0-9a-fA-F]+$/.test(String(s.id || '')) || typeof s.name !== 'string') {
+        alert('配置文件无效（第 ' + (i + 1) + ' 个信号缺少 id/name）');
+        return;
+      }
+      s.id = normId(s.id);
+    }
+    configs = arr;
+    saveCfg();   // localStorage + 设备 NVS
+    if (currentView === 'detail') renderSigList();
+    buildChartList();
+    if (currentView === 'charts') renderCharts();
+    toast('已导入 ' + arr.length + ' 个信号定义');
+  };
+  reader.readAsText(f);
+});
 
 // 曲线绘制节拍：Charts 页可见时重绘；记录中时刷新状态
 setInterval(function() {
@@ -705,6 +774,7 @@ setInterval(function() {
 }, 250);
 
 loadCfg();
+loadCfgFromDevice();
 
 function setTopTab(id) {
   var tabs = ['tabMonitor', 'tabCharts'];
