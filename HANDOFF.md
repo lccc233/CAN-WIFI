@@ -11,8 +11,8 @@
 1. **WiFi SoftAP** (设备自己发布热点 SDLG-CAN-WIFI，密码 12345678)
 2. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
 3. **网页 CAN 工具** (HTTP Server，表格显示收发 CAN 消息)
-4. **曲线页** (顶层页签：电压电流曲线=固定 20s 双画布 I/U+T/n；自定义曲线=任意 ID 用户定义信号；详情视图仅剩原始报文表)
-5. **PSRAM 记录仪** (录制 0x18FF0182/0x18FF0282 两报文，录满即停，CSV 物理值导出)
+4. **曲线页** (顶层页签：自定义曲线=任意 ID 用户定义信号，每信号一条曲线带；详情视图仅剩原始报文表)
+5. **信号解码** (设备端仅 /api/export CSV 物理值列用；页面曲线全部浏览器解码)
 6. **状态灯** (WS2812 GPIO48：无客户端连接=红灯常亮，有客户端=炫彩)
 
 ## CAN 不通根因 (2026-07-29)
@@ -51,25 +51,22 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 
 ### 架构
 - **接收链路** `can.c can_rx_task()`：TWAI 收帧 → 128 条内存环形缓冲（监控用）→
-  频率统计 → `can_log_write()`（PSRAM 记录，仅 ID 0x18FF0182/0x18FF0282）→
-  实时曲线数据源：0x18FF0182 → `sig_decode_motor()` + `sig_motor_set()`（仅更新最新值缓存）；
-  0x18FF0282 → `sig_decode_bus_vi()` + `sig_motor_get()` → `sig_vi_push(ts, &vi, &motor)`
-  （转矩/转速与电流/电压同一条 50ms 时间基进环）
+  频率统计 → `can_log_write()`（PSRAM 记录，仅 ID 0x18FF0182/0x18FF0282）。
+  （2026-09-22 第三轮起 RX 任务不再挂实时曲线钩子——信号曲线页已移除，见下文）
 - **录制缓冲** `can_logger.c`：`heap_caps_malloc(6MB, MALLOC_CAP_SPIRAM)`，
   约 314000 条（20 字节/条）。**录满自动停止**（不覆盖、不阻塞），dropped 计数；
   PSRAM 分配失败则 `psram_ok=false` 安全区降级——Record 返回 "PSRAM not available"，
   监控功能完全不受影响。单写者模式：仅 RX 任务写，读侧（status/export）走 mutex 快照
-- **信号解码** `signal_decode.c/h`：
-  - `SIG_LITTLE_ENDIAN 1` 宏控制 16 位原始值字节序（协议表未标注，实测曲线不对切 0）
-  - 电流哨兵值 0x2710 = 「U 相电流零漂故障」，前端跳过不画，CSV 仍导出
-  - `sig_vi_push/sig_vi_snapshot`：**1024 点**实时曲线环形缓冲（不依赖录制开关；
-    曾用 1200 导致 `&(size-1)` 掩码在非 2 幂下错位覆盖，已修为 1024=真 2 的幂，
-    50ms/点 ≈ 51s 窗）；点结构 `sig_vi_point_t{t,current_x10,voltage_x10,torque,rpm,fault,motor_v}`
+- **信号解码** `signal_decode.c/h`（仅 /api/export CSV 物理值列使用）：
+  - `SIG_LITTLE_ENDIAN 1` 宏控制 16 位原始值字节序（协议表未标注，实测不对切 0）
+  - 电流哨兵值 0x2710 = 「U 相电流零漂故障」，CSV 仍导出原始值
+  - （原 1024 点实时曲线环形缓冲与电机缓存已随曲线页移除，曾修过
+    1200→1024 非 2 幂掩码 bug——历史教训保留在此）
 - **导出** `web_server.c api_export_handler()`：每次请求实时 `can_log_get_buffer()`
   取基址+条数（禁止开机缓存——曾因缓存条数 0 导致 CSV 只有表头），
   64 条/批 memcpy 后格式化，4KB 行缓冲攒半刷 `httpd_resp_send_chunk`，批量间 delay 10ms
-- **前端状态**：录制状态并入 `/api/messages` 的 `rec` 字段（顶层 `recIds` 未采用），
-  不新增轮询请求
+- **前端状态**：`rec` 字段仍并入 `/api/messages` 响应，但页面已无录制 UI
+  （录制改由自定义曲线页的前端记录器承担；`/api/rec/*` 留作 curl 备用）
 
 ### CSV 列
 `no,timestamp_ms,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
@@ -96,9 +93,8 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 
 ### 网页接口
 - `/api/messages` 开头带 `clk:{sync,boot,ep}`（浏览器授时状态），随后
-  `rec:{on,cnt,cap,drop,ms,psram}`、`total`、`freqs`、`messages`、
-  `vi:[{t,c,v,f,q,r,m}]`（c/v 物理值×10，q=转矩 Nm，r=转速 rpm，m=电机值有效标志，
-  服务端批量缓冲 `VI_BATCH_STR 3072`）；服务端 poll 忙闸期间秒回 `{"busy":1}`，
+  `rec:{on,cnt,cap,drop,ms,psram}`、`total`、`freqs`、`messages`
+  （2026-09-22 第三轮起不再含 `vi` 段）；服务端 poll 忙闸期间秒回 `{"busy":1}`，
   忙闸带 **3 秒看门狗**（防止客户端中途断开导致忙闸标志永不复位）
 - `POST /api/time`（epoch_ms + tz 分钟，tz 钳位 ±840）/ `POST /api/rec/start|stop|clear`
 - `GET /api/export`（CSV，time 列授时后为真实时间）；`max_uri_handlers` 已 8→12
@@ -154,12 +150,16 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 
 - 主表格按 ID **升序**（数值比较，兼容变长 hex）
 - 详情视图 = 该 ID 原始报文表（无内部 Chart/Table 页签；内部 per-ID 曲线已按需求删除）
+  + 顶部信号定义卡片（`#sigList` + `#addSigBtn`，编辑走 `#formMask` 模态框）
+- 头部控制条只剩 Clear + 状态灯 + 消息计数（设备录制 Record/Export CSV 已移除；
+  `/api/rec/*` 与 `/api/export` 保留为 curl/URL 备用）
 - 发送面板 = `#sendPanel` `position:fixed` bottom:0，仅 CAN Monitor 显示；
   详情页底部换 `#backRow`（同一样式，fixed），两者各自随视图切换显隐
-- 曲线页 = 上下双画布（viCanvas：I 左轴/U 右轴；tqCanvas：T 左轴/n 右轴），
-  固定 20s 滚动窗（数据不足时左留白）、纵轴 10% 余量 + 最小跨度（I/U 1A/1V，
-  T 2Nm，n 200rpm）、哨兵点排除、大数 k 缩写、刻度小数自适应；
-  旧缓冲点（q/r/m 无效）自动降级：下半画布等新点到达后自然出现
+- 自定义曲线页 = 顶层第 2 页签 `#viewCharts`（控制条 + `#chartList` 每信号一条 strip）；
+  添加/编辑信号模态框 `#formMask`；`#toast` 轻提示（bottom 86px 避开 sendPanel）
+- **电压电流曲线页已整体移除**（2026-09-22 第三轮）：其 I/U/T/n 功能由自定义曲线页
+  预置信号等价覆盖；连带删除服务端 `/api/messages` 的 `vi` 数据块、
+  signal_decode 的 1024 点环形缓冲 + 电机缓存、can.c RX 钩子（见下节）
 - 自定义曲线页 = 顶层第 3 页签 `#viewCharts`（控制条 + `#chartList` 每信号一条 strip）；
   详情页顶部有 `#sig-card` 信号定义面板（`#sigList` + `#addSigBtn`）；
   添加/编辑信号走 `#formMask` 模态框（f_id/f_name/f_start/f_len/f_endian/f_signed/
@@ -194,22 +194,35 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 - **限制**：只积累打开页面后的数据；200ms 轮询快照去重，高速总线偶有丢帧（画曲线够用，
   非示波器级）；二进制增长约 7KB（bin 0xED3D0，分区余 7%——**后续再加大页面需留意分区**）
 
-## 信号曲线 (2026-09-22)
+## 电压电流曲线页移除 + 录制合并 (2026-09-22 第三轮)
 
-- 数据源：0x18FF0282 每 50ms 一点入环；0x18FF0182 每 10ms 只更新电机参数缓存，
-  环点带出该时刻最新 torque/rpm（`sig_motor_set/get`，独立 mutex）
-- `/api/messages` 下发最近 400 点（~=20s），前端 `drawDual()` 通用双轴绘制函数
-  （`getA/getB/div/minSpan/colA/colB/noteFn` 配置化）画 I/U 与 T/n 两画布
-- 横轴刻度 `-20s…0s`；绘线前 `save/clip` 到绘图区，滑出窗口左侧自然裁掉
-- `CHART_MAX_POINTS/renderChart/dataToInt/fmtValue` 已随详情曲线删除而移除；
-  `niceStep` 仍保留（两画布共用）
+- **动机**：自定义曲线页上线后，专用 I/U 双画布页与其功能重叠（预置信号
+  Current/Voltage/Torque/Speed 等价覆盖），且页面出现两套 Record/导出 CSV 按钮
+- **移除范围（信号曲线链路整体下线）**：
+  - `web_server.c`：删 `/api/messages` 的 `vi:[...]` 数据块（每 200ms 轮询省 ~20KB 死数据）
+    + `VI_JSON_MAX_POINTS/VI_BATCH_STR` 常量；忙闸 C3 保留（保护 128 条 messages 快照）
+  - `signal_decode.c/.h`：删 `sig_vi_point_t`、`sig_vi_push/count/snapshot/get_back`、
+    `sig_motor_set/get` + 电机缓存（~14KB RAM 随之释放）；保留 `sig_decode_motor/bus_vi`
+    （/api/export CSV 列仍在用）与 `sig_is_record_id`
+  - `can.c` RX 任务：删 0x18FF0182/0x18FF0282 的解码/入环钩子与 signal_decode.h include
+  - `web_body.h`：删 tabVI/viewVI 两画布；`web_head.h`：删 .chart-wrap/.chart-note/
+    .chart-ctl/.rec-status/#exportBtn/#recBtn.recording（recblink 动画保留给 #curveRecBtn）
+  - `web_js.h`：删 allVi/drawDual/drawVI/showVI/fmtAxisVal/updateRecUI/lastRecOn/
+    设备 recBtn 监听器；currentView 取值收敛为 'main'|'detail'|'charts'
+- **行为差异**：曲线数据来源从"服务端 400 点缓冲（页面打开前也有）"变为
+  "浏览器 histById（仅打开页面后）"；哨兵 0x2710 在自定义曲线里 Current 显示 0.0A
+  （通用解码器不识别哨兵）；设备端固定解码的 `SIG_LITTLE_ENDIAN` 仍影响 /api/export
+- **收益**：bin 0xED3D0 → 0xEA210（分区余 9%）、轮询 JSON 减半、RX 任务少两个分支、
+  RAM 释放 ~14KB；页面只剩一套 Record/导出 CSV（前端记录器）
+- **坑**：删 DOM 元素时必须同步删 JS 里的 `getElementById(...).addEventListener`——
+  对 null 调用会抛 TypeError 直接杀死整个脚本（本轮 recBtn/tabVI/exportBtn 三处）
 
 ## 关键代码位置
 | 文件 | 说明 |
 |------|------|
 | `main/can.c` | TWAI 驱动初始化、RX 任务（挂接记录/解码钩子）、告警处理、发送 API |
 | `main/can_logger.c/.h` | PSRAM 录制缓冲：过滤 0x18FF0182/0x18FF0282、录满即停、buffer/status API |
-| `main/signal_decode.c/.h` | 电机/母线报文信号解码、字节序宏、电机参数缓存 + 1024 点实时曲线环形缓冲 |
+| `main/signal_decode.c/.h` | 电机/母线报文信号解码（字节序宏）、sig_is_record_id 录制过滤——仅 /api/export CSV 列在用 |
 | `main/wifi.c` | WiFi SoftAP 发布、客户端计数、mDNS |
 | `main/led.c` | WS2812 状态灯（无客户端=红，有客户端=炫彩） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export |

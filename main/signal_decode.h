@@ -28,17 +28,6 @@ typedef struct {
     bool     valid;
 } sig_bus_vi_t;
 
-// 曲线显示用采样点（时间戳 + 解码值）
-typedef struct {
-    uint32_t t;          // 时间戳 ms
-    int16_t  current_x10;
-    uint16_t voltage_x10;
-    int16_t  torque;     // 输出转矩 Nm（取自最近一帧 0x18FF0182）
-    int16_t  rpm;        // 当前转速 rpm
-    uint8_t  fault;      // 电流哨兵故障标志
-    uint8_t  motor_v;    // 1 = torque/rpm 有效（旧点/未收到电机报文时为 0）
-} sig_vi_point_t;
-
 // 解析电机驱动报文
 void sig_decode_motor(const uint8_t *data, uint8_t dlc, sig_motor_t *out);
 
@@ -47,16 +36,3 @@ void sig_decode_bus_vi(const uint8_t *data, uint8_t dlc, sig_bus_vi_t *out);
 
 // 判断 ID 是否为录制目标
 bool sig_is_record_id(uint32_t id);
-
-// 实时 V/I 显示环形缓冲（曲线页数据源，不受录制开关影响）
-// 0x18FF0182 高频到达时仅更新缓存；0x18FF0282 到达时把缓存快照并入采样点
-void sig_motor_set(uint32_t timestamp_ms, const sig_motor_t *motor);
-void sig_motor_get(sig_motor_t *out);
-void sig_vi_push(uint32_t timestamp_ms, const sig_bus_vi_t *vi, const sig_motor_t *motor);
-// 当前缓冲内点数
-int  sig_vi_count(void);
-// 拷贝最近 max 条采样点（按时间升序），返回实际条数
-int  sig_vi_snapshot(sig_vi_point_t *out, int max);
-// 读取倒数第 idx 条（idx=0 为最新一条），失败返回 false
-// 线程安全、无共享缓冲，可被多个并发请求逐点读取
-bool sig_vi_get_back(int idx, sig_vi_point_t *out);

@@ -5,18 +5,14 @@
     <h1 id="headerTitle">CAN Bus Monitor</h1>
     <div class="header-right">
       <span class="msg-count" id="msgCount">0 messages</span>
-      <span class="rec-status" id="recStatus"></span>
-      <button class="btn danger" id="recBtn">Record</button>
-      <a class="btn" id="exportBtn" href="/api/export" download="can_log.csv">Export CSV</a>
       <span class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connecting...</span></span>
       <button class="btn danger" id="clearBtn">Clear</button>
     </div>
   </div>
 
-  <!-- 顶层页签：监控 / 电压电流曲线 / 自定义曲线 -->
+  <!-- 顶层页签：监控 / 自定义曲线 -->
   <div class="top-tabs">
     <button class="tab active" id="tabMonitor">CAN Monitor</button>
-    <button class="tab" id="tabVI">电压电流曲线</button>
     <button class="tab" id="tabCharts">自定义曲线</button>
   </div>
 
@@ -66,30 +62,6 @@
         </thead>
         <tbody id="detailBody"></tbody>
       </table>
-    </div>
-  </div>
-
-  <!-- 电压/电流曲线视图 -->
-  <div class="content hidden" id="viewVI">
-    <div class="chart-wrap">
-      <canvas id="viCanvas"></canvas>
-      <div class="chart-note">
-        <span id="viNote"></span>
-        <span class="chart-ctl">
-          <span style="color:#1a73e8;">&#9632; 电流 I (A)</span>
-          <span style="color:#ea4335;">&#9632; 电压 U (V)</span>
-        </span>
-      </div>
-    </div>
-    <div class="chart-wrap">
-      <canvas id="tqCanvas"></canvas>
-      <div class="chart-note">
-        <span id="tqNote"></span>
-        <span class="chart-ctl">
-          <span style="color:#188038;">&#9632; 转矩 T (Nm)</span>
-          <span style="color:#9334e6;">&#9632; 转速 n (rpm)</span>
-        </span>
-      </div>
     </div>
   </div>
 

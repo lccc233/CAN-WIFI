@@ -70,14 +70,6 @@
   }
   .tab.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
 
-  /* 曲线视图 */
-  .chart-wrap { padding: 8px 12px 12px; }
-  .chart-note {
-    color: #888; font-size: 0.72rem; padding: 6px 2px 0;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  }
-  .chart-ctl { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-
   table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
   thead { position: sticky; top: 0; z-index: 1; }
   th {
@@ -131,12 +123,7 @@
     position: relative; z-index: 1;
   }
   .top-tabs .tab { padding: 5px 16px; font-size: 0.8rem; }
-  .rec-status { color: #ea4335; font-size: 0.75rem; font-weight: bold; white-space: nowrap; }
-  .rec-status.idle { color: #5f6368; font-weight: normal; }
-  #exportBtn { text-decoration: none; }
-  #exportBtn.disabled { pointer-events: none; opacity: 0.4; }
-  #recBtn.recording { background: #ea4335; color: #fff; border-color: #ea4335;
-                      animation: recblink 1.2s infinite; }
+  /* 设备端录制按钮已移除（前端记录器 #curveRecBtn.recording 在下方） */
   @keyframes recblink { 50% { opacity: 0.65; } }
   .hidden { display: none !important; }
 
@@ -218,7 +205,6 @@
     .msg-count { display: none; }          /* 窄屏隐藏消息计数 */
     .top-tabs { padding: 5px 8px; }
     .top-tabs .tab { padding: 5px 12px; font-size: 0.78rem; }
-    .chart-wrap { padding: 6px 8px 10px; }
     .sig-card, .strip { margin: 6px 8px; padding: 6px 8px; }
     .sigdef { display: none; }               /* 窄屏隐藏信号定义长文本 */
     .hint { padding: 2px 8px 4px; }

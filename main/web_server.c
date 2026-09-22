@@ -17,9 +17,7 @@ static const char *TAG = "web";
 static httpd_handle_t s_server = NULL;
 
 // ---- 集中常量（D3） ----
-#define HTTP_TASK_STACK_SIZE    12288   // /api/messages 局部 snapshot+freq+vbuf 较大
-#define VI_JSON_MAX_POINTS      400     // 单次响应最多返回的曲线点数
-#define VI_BATCH_STR            3072    // vi 行攒发缓冲大小
+#define HTTP_TASK_STACK_SIZE    12288   // /api/messages 局部 snapshot+freq 快照较大
 #define EXPORT_READ_BATCH       64      // 导出每批读取条数
 #define EXPORT_FLUSH_INTERVAL_MS 10     // 每批发送间隔（让出 CPU 给 RX/其他连接）
 #define EXPORT_LINE_BUF         4096
@@ -119,64 +117,6 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
         }
         snprintf(entry + n, sizeof(entry) - n, "\"}");
         httpd_resp_sendstr_chunk(req, entry);
-    }
-
-    // 电压/电流曲线数据（0x18FF0282 解码值，t=ms, c=电流A*10, v=电压V*10, f=电流哨兵故障）
-    // C1：攒批发送（本地缓冲，无跨请求共享问题），syscall 数从 400+ 降到 ~10
-    {
-        char vbuf[VI_BATCH_STR];
-        size_t vused = 0;
-        int vi_total = sig_vi_count();
-        if (vi_total > VI_JSON_MAX_POINTS) vi_total = VI_JSON_MAX_POINTS;
-        httpd_resp_sendstr_chunk(req, "],\"vi\":[");
-        for (int i = vi_total - 1; i >= 0; i--) {
-            sig_vi_point_t vp;
-            if (!sig_vi_get_back(i, &vp)) continue;
-            // i==vi_total-1 是最旧一条（第一个输出），不加前导逗号
-            int n = snprintf(vbuf + vused, sizeof(vbuf) - vused,
-                     "%s{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d,\"q\":%d,\"r\":%d,\"m\":%d}",
-                     (i == vi_total - 1) ? "" : ",",
-                     (unsigned long)vp.t,
-                     (int)vp.current_x10,
-                     (unsigned long)vp.voltage_x10,
-                     (int)vp.fault,
-                     (int)vp.torque,
-                     (int)vp.rpm,
-                     (int)vp.motor_v);
-            if (n < 0 || (size_t)n >= sizeof(vbuf) - vused) {
-                // 缓冲将满：刷出已攒部分后重写该点
-                esp_err_t cerr = httpd_resp_send_chunk(req, vbuf, vused);
-                if (cerr != ESP_OK) {
-                    ESP_LOGE(TAG, "vi chunk send fail 0x%x", (int)cerr);
-                    s_busy_msgs = false;
-                    return ESP_FAIL;
-                }
-                vused = 0;
-                n = snprintf(vbuf, sizeof(vbuf) - vused, "{\"t\":%lu,\"c\":%d,\"v\":%lu,\"f\":%d,\"q\":%d,\"r\":%d,\"m\":%d}",
-                     (unsigned long)vp.t,
-                     (int)vp.current_x10,
-                     (unsigned long)vp.voltage_x10,
-                     (int)vp.fault,
-                     (int)vp.torque,
-                     (int)vp.rpm,
-                     (int)vp.motor_v);
-            }
-            vused += n;
-
-            if (vused > sizeof(vbuf) / 2) {
-                if (httpd_resp_send_chunk(req, vbuf, vused) != ESP_OK) {
-                    s_busy_msgs = false;
-                    return ESP_FAIL;
-                }
-                vused = 0;
-            }
-        }
-        if (vused > 0) {
-            if (httpd_resp_send_chunk(req, vbuf, vused) != ESP_OK) {
-                s_busy_msgs = false;
-                return ESP_FAIL;
-            }
-        }
     }
 
     httpd_resp_sendstr_chunk(req, "]}");
