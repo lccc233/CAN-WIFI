@@ -140,6 +140,72 @@
   @keyframes recblink { 50% { opacity: 0.65; } }
   .hidden { display: none !important; }
 
+  /* ===== 自定义曲线 / 信号定义 ===== */
+  .rowline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .grow { flex: 1; }
+  .sig-card {
+    background: #fff; border: 1px solid #e3e6ea; border-radius: 8px;
+    padding: 6px 10px; margin: 8px 12px;
+  }
+  .sig-title { font-size: 0.85rem; }
+  .sigrow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 4px; border-bottom: 1px solid #f2f2f2;
+    font-size: 0.78rem; flex-wrap: wrap;
+  }
+  .sigrow:last-child { border-bottom: none; }
+  .cdot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .signame { font-weight: 600; min-width: 90px; }
+  .sigdef { color: #888; }
+  .sigval { margin-left: auto; font-weight: 600; color: #188038; }
+  .charts-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px 0; }
+  .win-label { color: #555; font-size: 0.78rem; display: flex; align-items: center; gap: 4px; }
+  .charts-bar select {
+    font-family: inherit; font-size: 0.78rem;
+    padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; background: #fff;
+  }
+  .strip {
+    background: #fff; border: 1px solid #e3e6ea; border-radius: 8px;
+    padding: 8px 10px; margin: 8px 12px;
+  }
+  .strip-head { display: flex; align-items: center; gap: 10px; font-size: 0.78rem; margin-bottom: 4px; }
+  .strip canvas { display: block; }
+  .hint { color: #888; font-size: 0.72rem; padding: 2px 12px 4px; }
+  .empty { color: #888; font-size: 0.78rem; padding: 14px 8px; text-align: center; }
+  #curveRecBtn.recording { background: #ea4335; color: #fff; border-color: #ea4335;
+                           animation: recblink 1.2s infinite; }
+
+  /* 添加/编辑信号模态框 */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal {
+    background: #fff; border-radius: 10px; padding: 16px;
+    width: min(420px, 94vw); max-height: 92vh; overflow: auto;
+  }
+  .modal h3 { font-size: 0.9rem; margin-bottom: 12px; }
+  .fgrid {
+    display: grid; grid-template-columns: 110px 1fr; gap: 8px;
+    align-items: center; font-size: 0.78rem;
+  }
+  .fgrid label { color: #555; }
+  .fgrid input[type=text], .fgrid input[type=number], .fgrid select {
+    width: 100%; padding: 5px 7px; border: 1px solid #ccc; border-radius: 4px;
+    font-family: inherit; font-size: 0.8rem; background: #fff;
+  }
+  .mt { margin-top: 14px; }
+  .modal .btn { padding: 6px 14px; }
+
+  /* 轻提示 */
+  .toast {
+    position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 8px 16px; border-radius: 18px;
+    font-size: 0.78rem; z-index: 99; opacity: 0; transition: opacity .25s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: .95; }
+
   /* 触屏点击高亮与字体缩放 */
   button { touch-action: manipulation; }
   html { -webkit-text-size-adjust: 100%; }
@@ -153,6 +219,10 @@
     .top-tabs { padding: 5px 8px; }
     .top-tabs .tab { padding: 5px 12px; font-size: 0.78rem; }
     .chart-wrap { padding: 6px 8px 10px; }
+    .sig-card, .strip { margin: 6px 8px; padding: 6px 8px; }
+    .sigdef { display: none; }               /* 窄屏隐藏信号定义长文本 */
+    .hint { padding: 2px 8px 4px; }
+    .fgrid { grid-template-columns: 96px 1fr; }
     .send-panel { padding: 8px 10px; }
     #sendId { width: 84px; }
     #sendData { flex: 1; min-width: 120px; }

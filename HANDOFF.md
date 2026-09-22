@@ -11,7 +11,7 @@
 1. **WiFi SoftAP** (设备自己发布热点 SDLG-CAN-WIFI，密码 12345678)
 2. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
 3. **网页 CAN 工具** (HTTP Server，表格显示收发 CAN 消息)
-4. **曲线页** (顶层页签：上下双画布——电流/电压、转矩/转速，固定 20s 滚动窗；详情视图仅剩原始报文表)
+4. **曲线页** (顶层页签：电压电流曲线=固定 20s 双画布 I/U+T/n；自定义曲线=任意 ID 用户定义信号；详情视图仅剩原始报文表)
 5. **PSRAM 记录仪** (录制 0x18FF0182/0x18FF0282 两报文，录满即停，CSV 物理值导出)
 6. **状态灯** (WS2812 GPIO48：无客户端连接=红灯常亮，有客户端=炫彩)
 
@@ -160,6 +160,39 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
   固定 20s 滚动窗（数据不足时左留白）、纵轴 10% 余量 + 最小跨度（I/U 1A/1V，
   T 2Nm，n 200rpm）、哨兵点排除、大数 k 缩写、刻度小数自适应；
   旧缓冲点（q/r/m 无效）自动降级：下半画布等新点到达后自然出现
+- 自定义曲线页 = 顶层第 3 页签 `#viewCharts`（控制条 + `#chartList` 每信号一条 strip）；
+  详情页顶部有 `#sig-card` 信号定义面板（`#sigList` + `#addSigBtn`）；
+  添加/编辑信号走 `#formMask` 模态框（f_id/f_name/f_start/f_len/f_endian/f_signed/
+  f_factor/f_offset/f_unit/f_color）；`#toast` 轻提示（bottom 86px 避开 sendPanel）
+
+## 自定义曲线 (2026-09-22，固件零改动)
+
+- **思路**：`/api/messages` 本就下发每帧原始字节（hex 串），解码在浏览器做完全等价——
+  任意 CAN ID 按用户配置（DBC 风格 start/len/endian/signed/factor/offset/unit/color/
+  enabled）解析信号并绘制，固件一行不改（web_server.c 0 改动）
+- **数据层**：`processMessages()` 在 `total` 变化时把每条新帧按 ID 追加进
+  `histById`（`{t,b,d,e}`，每 ID 上限 4000 点）；服务端快照是最近 128 条**重叠**返回，
+  用每 ID 水钟 `histLastT`（`t > last` 才收；`t+5000 < last` 视为设备重启清空重来）去重
+- **解码器** `extractRaw/decodePoint/sigBytesCovered`：Intel 从 start 位号逐位拼装；
+  Motorola 先换算 `bitPos=(start>>3)*8+(7-(start&7))` 从 MSB 逐位移入；
+  位区间超出 DLC → null（曲线断线）；`值 = raw×factor+offset`。
+  demo 包 11 项单测全通过（移植后追加"默认配置=固件语义"2 项，共 13/13）
+- **UI**：Monitor 主表/详情表 `colorizeData()` 按信号颜色给字节加半透明底色+彩色下划线；
+  详情页信号面板实时显示最新解码值；Charts 页每信号一条 `drawStrip()` 曲线带
+  （独立量程、niceStep(·,4)、10s/30s/60s 窗、暂停冻结重绘）
+- **前端记录器** `curveRec*`（勿与头部设备 PSRAM Record `#recBtn` 混淆）：
+  Record 时对每个已启用信号在帧到达时采样 `{t,v}` 入 `curveRecData[sigKey]`，
+  每信号上限 20 万点（满则一次 splice 掉 2000 条防 shift 卡顿）；
+  「导出记录CSV」用指针法按时间归并成宽表 `no,time_rel_ms,Torque(Nm)@0x..,...`
+- **配置持久化**：`localStorage['cansignals']`（demo 用 'cansignals_demo'，跨 origin
+  不互通，属正常）；「导出配置」下载 JSON；**无导入功能**（按方案约定）
+- **默认信号**：与固件 signal_decode.c 协议表一致——Torque/Speed（0x18ff0182，
+  Intel start=8/24，signed，offset −3000/−15000）、Current/Voltage（0x18ff0282，
+  Intel start=0/16，factor 0.1，Current offset −1000 unsigned）。
+  注意哨兵 0x2710 在自定义曲线里 Current 会显示 0.0A、Voltage 1000V（通用解码器
+  不识别哨兵；哨兵处理仍只在本项目专用曲线页做）
+- **限制**：只积累打开页面后的数据；200ms 轮询快照去重，高速总线偶有丢帧（画曲线够用，
+  非示波器级）；二进制增长约 7KB（bin 0xED3D0，分区余 7%——**后续再加大页面需留意分区**）
 
 ## 信号曲线 (2026-09-22)
 
