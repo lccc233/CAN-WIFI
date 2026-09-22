@@ -27,8 +27,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // WiFi SoftAP 模式 — 发布热点 SDLG-CAN-WIFI
-    ESP_ERROR_CHECK(wifi_init_softap());
+    // WiFi STA 模式 — 连接现有路由器（SSID/密码见 wifi.h）
+    ESP_ERROR_CHECK(wifi_init_sta());
 
     // CAN 总线初始化（TWAI + RX 任务 + 心跳任务）
     ESP_ERROR_CHECK(can_init());
@@ -39,13 +39,13 @@ void app_main(void)
     // HTTP 服务器
     ESP_ERROR_CHECK(web_server_start());
 
-    // WS2812 状态灯（无客户端=红灯，有客户端=炫彩）
+    // WS2812 状态灯（未连上路由器=红灯，连上=炫彩）
     ESP_ERROR_CHECK(led_init());
 
     ESP_LOGI(TAG, "=============================================");
     ESP_LOGI(TAG, "  CAN Bus Monitor Ready!");
-    ESP_LOGI(TAG, "  WiFi AP: %s", WIFI_SSID);
-    ESP_LOGI(TAG, "  Web:  http://%s.local (or http://192.168.4.1)", MDNS_HOSTNAME);
+    ESP_LOGI(TAG, "  WiFi STA: connecting to \"%s\"", WIFI_STA_SSID);
+    ESP_LOGI(TAG, "  Web:  http://%s.local (IP 见上方日志或路由器后台)", MDNS_HOSTNAME);
     ESP_LOGI(TAG, "=============================================");
 
     // 空闲 — 所有工作在 FreeRTOS 任务中完成

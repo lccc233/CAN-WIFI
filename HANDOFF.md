@@ -8,12 +8,12 @@
 - **CAN 收发器**: SIT1042AQT/3（STB 接地，VCC 5V，**VIO 接 3.3V**）
 
 ## 项目功能
-1. **WiFi SoftAP** (设备自己发布热点 SDLG-CAN-WIFI，密码 12345678)
+1. **WiFi STA** (连接现有路由器 `lc`，密码 12345678，断线自动重连，mDNS: can-monitor.local)
 2. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
 3. **网页 CAN 工具** (HTTP Server，表格显示收发 CAN 消息)
 4. **曲线页** (顶层页签：自定义曲线=任意 ID 用户定义信号，每信号一条曲线带；详情视图仅剩原始报文表)
 5. **信号解码** (设备端仅 /api/export CSV 物理值列用；页面曲线全部浏览器解码)
-6. **状态灯** (WS2812 GPIO48：无客户端连接=红灯常亮，有客户端=炫彩)
+6. **状态灯** (WS2812 GPIO48：未连上路由器=红灯常亮，连上=炫彩)
 
 ## CAN 不通根因 (2026-07-29)
 
@@ -44,7 +44,7 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 ## 当前代码状态
 - 多文件架构：`main.c`, `can.c`, `can_logger.c`, `signal_decode.c`, `wifi.c`, `web_server.c`, `web_page.h`, `led.c`
 - TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO5，RX=GPIO4
-- WiFi SoftAP 模式发布热点 SDLG-CAN-WIFI（密码 12345678），IP 192.168.4.1，mDNS: `can-monitor.local`
+- WiFi STA 模式连接路由器 `lc`（密码 12345678），IP 由 DHCP 分配（启动日志打印），mDNS: `can-monitor.local`
 - 网页 200ms 轮询：监控表 + 详情曲线/Table + 顶层「电压电流曲线」页 + 录制控制/状态显示
 
 ## PSRAM 记录仪 (2026-09-18)
@@ -245,7 +245,7 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 | `main/can.c` | TWAI 驱动初始化、RX 任务（挂接记录/解码钩子）、告警处理、发送 API |
 | `main/can_logger.c/.h` | PSRAM 录制缓冲：过滤 0x18FF0182/0x18FF0282、录满即停、buffer/status API |
 | `main/signal_decode.c/.h` | 电机/母线报文信号解码（字节序宏）、sig_is_record_id 录制过滤——仅 /api/export CSV 列在用 |
-| `main/wifi.c` | WiFi SoftAP 发布、客户端计数、mDNS |
+| `main/wifi.c` | WiFi STA 连接/断线重连、连接状态、mDNS |
 | `main/led.c` | WS2812 状态灯（无客户端=红，有客户端=炫彩） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export |
 | `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_JS） |

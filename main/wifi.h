@@ -3,13 +3,11 @@
 #include "esp_err.h"
 #include <stdbool.h>
 
-// SoftAP 热点配置（设备自己发布 WiFi，IP 固定 192.168.4.1）
-#define WIFI_SSID        "SDLG-CAN-WIFI"
-#define WIFI_AP_PASS     "12345678"   // 密码留空 "" 则为开放网络
-#define WIFI_AP_CHANNEL  1
-#define WIFI_AP_MAX_CONN 4
+// STA 模式配置（连接现有 WiFi 路由器，IP 由路由器 DHCP 分配；
+// 启动日志会打印获得的 IP，也可用 mDNS 访问 http://can-monitor.local）
+#define WIFI_STA_SSID    "lc"
+#define WIFI_STA_PASS    "12345678"
 #define MDNS_HOSTNAME    "can-monitor"
 
-esp_err_t wifi_init_softap(void);
-bool      wifi_is_connected(void);
-int       wifi_get_sta_count(void);   // 当前连接的客户端数
+esp_err_t wifi_init_sta(void);
+bool      wifi_is_connected(void);   // 已连上 AP 且拿到 IP

@@ -26,11 +26,12 @@
 - **设备端原始帧备份导出**（无页面 UI，仅 API 备用）：
   - `POST /api/rec/start` / `POST /api/rec/stop` 可用 curl 触发 PSRAM 录制
     （只录 0x18FF0182/0x18FF0282 两 ID，约 37 万条 ≈ 52 分钟，录满自动停止）
-  - 浏览器直接访问 `http://192.168.4.1/api/export` 下载物理值 CSV：
+  - 浏览器直接访问 `http://<设备IP>/api/export` 下载物理值 CSV：
     `no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
   - 日常使用建议用**自定义曲线页的前端记录器**（记录已配置信号的解码值，导出宽表 CSV）
-- **WiFi SoftAP**：设备自己发布热点 `SDLG-CAN-WIFI`（密码 `12345678`），手机/电脑连上后访问 `http://192.168.4.1` 或 `http://can-monitor.local`
-- **状态灯**（WS2812，GPIO48）：**无设备连接 WiFi → 红灯常亮；有设备连接 → 炫彩**（色相循环）
+- **WiFi STA**：连接现有路由器 `lc`（密码 `12345678`），IP 由路由器 DHCP 分配
+  （启动日志打印 IP；`can-monitor.local` 也可访问）
+- **状态灯**（WS2812，GPIO48）：**未连上路由器 → 红灯常亮；连上（拿到 IP）→ 炫彩**（色相循环）
 
 ## 硬件
 
@@ -68,9 +69,10 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 
 ## 使用
 
-1. 设备上电后自动发布热点 `SDLG-CAN-WIFI`（密码 `12345678`），手机/电脑连接该热点
+1. 手机/电脑连接 WiFi 路由器 **`lc`**（密码 `12345678`），设备上电后自动加入同一热点
    - **注意**：`CONFIG_SPIRAM_MEMTEST=y` 会让上电慢几秒（PSRAM 内存测试），正常
-2. 浏览器打开 `http://192.168.4.1` 或 `http://can-monitor.local`
+   - 设备 IP 在启动串口日志（`Got IP: x.x.x.x`）或路由器后台查看
+2. 浏览器打开 `http://<设备IP>` 或 `http://can-monitor.local`
 3. 在底部发送区填写 ID / DLC / Data 即可向总线发送 CAN 帧（该发送面板只在 CAN Monitor 页显示）
 4. **看报表**：点主表格里任意一行 → 该 ID 的原始报文历史表，左上 Back to List 返回
 5. **自定义曲线**：详情页「+ 添加曲线」定义信号
@@ -80,7 +82,7 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 6. **记录/导出**：自定义曲线页点 `● Record` 记录已启用信号的解码值（状态栏显示
    `● REC n pts 时长`），停止后点「导出记录CSV」下载宽表 CSV（Excel/Python 可直接分析）；
    「导出配置」把信号定义备份为 JSON
-7. **原始帧备份**（可选）：浏览器直接访问 `http://192.168.4.1/api/export`
+7. **原始帧备份**（可选）：浏览器直接访问 `http://<设备IP>/api/export`
    下载设备 PSRAM 录制的物理值 CSV（需先用 curl `POST /api/rec/start|stop` 触发）
 
 ### 信号定义（来自协议表）
@@ -132,7 +134,7 @@ main/
 ├── can.c / can.h      # TWAI 驱动、RX 任务、每 ID 频率统计
 ├── can_logger.c/.h    # PSRAM 录制缓冲（双 ID 过滤，录满即停）
 ├── signal_decode.c/.h # 0x18FF0182/0x18FF0282 信号解码（/api/export CSV 物理值列用）
-├── wifi.c / wifi.h    # WiFi SoftAP + mDNS + 客户端计数
+├── wifi.c / wifi.h    # WiFi STA（连接路由器）+ mDNS + 断线重连
 ├── time_sync.c/.h     # 浏览器授时换算（真实时间戳）
 ├── led.c / led.h      # WS2812 状态灯（红=无客户端，炫彩=有客户端）
 ├── web_server.c       # HTTP 服务与 JSON API / CSV 导出

@@ -34,13 +34,13 @@ static void led_task(void *arg)
 {
     uint32_t hue = 0;
     while (1) {
-        if (wifi_get_sta_count() <= 0) {
-            // 无设备连接：红灯常亮
+        if (!wifi_is_connected()) {
+            // 未连上路由器：红灯常亮
             led_strip_set_pixel(s_strip, 0, LED_BRIGHTNESS, 0, 0);
             led_strip_refresh(s_strip);
             vTaskDelay(pdMS_TO_TICKS(100));
         } else {
-            // 有设备连接：炫彩（色相循环）
+            // 已连上路由器：炫彩（色相循环）
             uint8_t r, g, b;
             hsv_to_rgb(hue, &r, &g, &b);
             led_strip_set_pixel(s_strip, 0, r, g, b);
@@ -65,7 +65,7 @@ esp_err_t led_init(void)
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_strip));
     led_strip_clear(s_strip);
 
-    ESP_LOGI(TAG, "WS2812 ready (GPIO=%d, %d LED): no-client=red, client=rainbow",
+    ESP_LOGI(TAG, "WS2812 ready (GPIO=%d, %d LED): disconnected=red, connected=rainbow",
              LED_GPIO, LED_NUM);
 
     xTaskCreate(led_task, "led_task", 4096, NULL, 5, NULL);

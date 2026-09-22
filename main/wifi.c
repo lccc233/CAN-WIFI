@@ -12,71 +12,67 @@
 
 static const char *TAG = "wifi";
 
-static bool s_ap_ready = false;
-static volatile int s_sta_count = 0;   // 当前连接的客户端数
+static volatile bool s_sta_got_ip = false;   // 已连上 AP 且拿到 IP
+static int s_retry_count = 0;
 
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
-        wifi_event_ap_staconnected_t *event = (wifi_event_ap_staconnected_t *)data;
-        s_sta_count++;
-        ESP_LOGI(TAG, "Station connected: " MACSTR " AID=%d (total=%d)",
-                 MAC2STR(event->mac), event->aid, s_sta_count);
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
-        wifi_event_ap_stadisconnected_t *event = (wifi_event_ap_stadisconnected_t *)data;
-        if (s_sta_count > 0) s_sta_count--;
-        ESP_LOGI(TAG, "Station disconnected: " MACSTR " AID=%d (total=%d)",
-                 MAC2STR(event->mac), event->aid, s_sta_count);
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        ESP_LOGI(TAG, "STA started, connecting to \"%s\"...", WIFI_STA_SSID);
+        esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)data;
+        s_sta_got_ip = false;
+        s_retry_count++;
+        // 无限重连：CAN 工具应始终尝试回到网络
+        // （esp_wifi_connect 会在事件回调里立即发起；断开事件本身自带秒级间隔）
+        ESP_LOGW(TAG, "Disconnected (reason=%d), retry #%d...",
+                 event->reason, s_retry_count);
+        esp_wifi_connect();
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
+        s_sta_got_ip = true;
+        s_retry_count = 0;
+        ESP_LOGI(TAG, "Connected! Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
     }
 }
 
 bool wifi_is_connected(void)
 {
-    return s_ap_ready;
+    return s_sta_got_ip;
 }
 
-int wifi_get_sta_count(void)
+// STA 模式：连接现有 WiFi 路由器（IP 由 DHCP 分配）
+esp_err_t wifi_init_sta(void)
 {
-    return s_sta_count;
-}
-
-// 启动 SoftAP 热点（设备自己发布 WiFi）
-esp_err_t wifi_init_softap(void)
-{
-    esp_netif_create_default_wifi_ap();
+    esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
     wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = WIFI_SSID,
-            .ssid_len = strlen(WIFI_SSID),
-            .password = WIFI_AP_PASS,
-            .channel = WIFI_AP_CHANNEL,
-            .authmode = WIFI_AUTH_WPA2_PSK,
-            .max_connection = WIFI_AP_MAX_CONN,
+        .sta = {
+            .ssid = WIFI_STA_SSID,
+            .password = WIFI_STA_PASS,
+            .threshold.authmode = WIFI_AUTH_WPA_PSK,   // 不回落到开放网络
         },
     };
-    // 密码为空时使用开放网络
-    if (strlen(WIFI_AP_PASS) == 0) {
-        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
-    }
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // C4：SoftAP 模式下 Modem Sleep 无意义，显式关闭避免驱动默认值变化导致延迟
+    // 实时轮询场景：关闭 Modem Sleep，降低 HTTP 延迟
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    s_ap_ready = true;
-    ESP_LOGI(TAG, "SoftAP started: SSID=\"%s\" IP=192.168.4.1",
-             WIFI_SSID);
+    ESP_LOGI(TAG, "STA mode: connecting to SSID=\"%s\" (IP via DHCP)",
+             WIFI_STA_SSID);
 
     // mDNS：让 http://can-monitor.local 可访问
     esp_err_t mdns_ret = mdns_init();
