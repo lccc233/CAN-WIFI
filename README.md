@@ -6,17 +6,23 @@
 
 - **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO5，RX=GPIO4
 - **Web 实时界面**（HTTP Server，页面 200ms 轮询刷新）：
-  - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **电压电流曲线**（0x18FF0282 双 Y 轴实时曲线）
-  - 按 ID 分组展示最新消息，列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
+  - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **信号曲线**（上下双画布：电流/电压、转矩/转速）
+  - 按 ID 分组展示最新消息（**按 ID 从小到大排序**），列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
   - **Freq**：每个 ID 的发送频率（条/秒，基于滚动 1 秒窗口统计）
-  - 点击某行进入该 ID 的详情，可切换 **Chart（曲线）/ Table（原始报文）** 两个视图
-  - **曲线视图**：把每条报文的前 4 字节转成整数画出随时间变化的曲线，支持字节序（大端/小端）与有符号切换
+  - 点击某行进入该 ID 的**原始报文历史表**（自动滚动跟随最新），无内部曲线
+  - 发送面板固定在 CAN Monitor 页面底部；进入详情页时隐藏（替换为返回按钮）
   - 支持手动发送任意 CAN 帧、一键清空
+- **信号曲线页**（无需先录制，200ms 轮询重绘）：
+  - 上画布：母线电流 **I(A，左轴)** + 母线电压 **U(V，右轴)**（0x18FF0282）
+  - 下画布：输出转矩 **T(Nm，左轴)** + 当前转速 **n(rpm，右轴)**（0x18FF0182，50ms 采样并入同时间基）
+  - 横轴为**固定 20s 滚动窗**（`-20s ~ 0s`，曲线右滑入）；纵轴动态范围加 10% 余量并设最小跨度，哨兵故障点不参与绘制
+- **浏览器授时**：打开页面自动 `POST /api/time` 校准，CSV 导出的 `time` 列为真实时间
+  （未授时时回退为开机相对时间 `boot + HH:MM:SS.mmm`）
 - **PSRAM 记录仪**：
   - 头部控制条：**Record（开始/停止录制）** / **Export CSV（导出）** / 录制状态（条数/容量/丢弃）
   - 只录制两个报文 ID：`0x18FF0182`（10ms，电机转矩/转速/故障）和 `0x18FF0282`（50ms，母线电流/电压），其余 ID 仅走监控环形缓冲
-  - 缓冲在 PSRAM（约 6MB，**约 31 万条，两报文合计 120 帧/秒 ≈ 44 分钟**），**录满自动停止**（不覆盖、不阻塞接收），丢弃计数显示在页面
-  - CSV 导出为物理值列：`no,timestamp_ms,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
+  - 缓冲在 PSRAM（约 6MB，**约 37 万条，两报文合计 120 帧/秒 ≈ 52 分钟**），**录满自动停止**（不覆盖、不阻塞接收），丢弃计数显示在页面
+  - CSV 导出为物理值列：`no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
 - **WiFi SoftAP**：设备自己发布热点 `SDLG-CAN-WIFI`（密码 `12345678`），手机/电脑连上后访问 `http://192.168.4.1` 或 `http://can-monitor.local`
 - **状态灯**（WS2812，GPIO48）：**无设备连接 WiFi → 红灯常亮；有设备连接 → 炫彩**（色相循环）
 
@@ -59,16 +65,27 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 1. 设备上电后自动发布热点 `SDLG-CAN-WIFI`（密码 `12345678`），手机/电脑连接该热点
    - **注意**：`CONFIG_SPIRAM_MEMTEST=y` 会让上电慢几秒（PSRAM 内存测试），正常
 2. 浏览器打开 `http://192.168.4.1` 或 `http://can-monitor.local`
-3. 在底部发送区填写 ID / DLC / Data 即可向总线发送 CAN 帧
-4. **看曲线**：点主表格里任意一行 → 进入该 ID 详情，默认显示曲线，右上角可切到 `Table` 看原始报文
-5. **电压/电流曲线**：顶部页签切到「电压电流曲线」，实时刻画 0x18FF0282 的
-   母线电流（左轴，A）与母线电压（右轴，V）；无需先录制
+3. 在底部发送区填写 ID / DLC / Data 即可向总线发送 CAN 帧（该发送面板只在 CAN Monitor 页显示）
+4. **看报表**：点主表格里任意一行 → 该 ID 的原始报文历史表，左上 Back to List 返回
+5. **信号曲线**：顶部页签切到「电压电流曲线」，上画布
+   电流(左轴 A)/电压(右轴 V)，下画布 转矩(左轴 Nm)/转速(右轴 rpm)；无需先录制
 6. **录制/导出**：点 `Record` 开始录制（网页显示 REC 条数/容量/时长），再点停止；
    点 `Export CSV` 下载已录数据（Excel 可直接打开）
 
-### 电压/电流信号定义（来自协议表）
+### 信号定义（来自协议表）
 
-报文 `0x18FF0282`（扩展帧，50ms，8 字节，字节序默认**小端**）：
+两个报文（扩展帧，8 字节，16 位原始值字节序默认**小端**）：
+
+**`0x18FF0182`（10ms，电机）**
+
+| 信号 | 位置 | 公式 | 范围 |
+|------|------|------|------|
+| 输出转矩 | byte1-2 | `raw − 3000` (Nm) | −3000 ~ +3000 |
+| 当前转速 | byte3-4 | `raw − 15000` (rpm) | −15000 ~ +15000 |
+| 故障代码 | byte6 | 原始值 | 0 ~ 255 |
+| 故障等级 | byte7 低 4 位 | 原始值 | 0 ~ 15 |
+
+**`0x18FF0282`（50ms）**
 
 | 信号 | 位置 | 公式 | 范围 |
 |------|------|------|------|
@@ -76,35 +93,22 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 | 母线电压 | byte2-3 | `raw × 0.1` (V) | 0 ~ 1000.0 |
 
 - **哨兵值**：电流原始值 `0x2710` 表示“U 相电流零漂故障”，曲线会跳过该点不画（CSV 仍导出原始值）
-- **字节序不确定**：曲线幅值明显不对时，把 `main/signal_decode.h` 中
+- **字节序不确定**：曲线幅值方向明显不对时，把 `main/signal_decode.h` 中
   `SIG_LITTLE_ENDIAN` 改为 `0`（Motorola 大端）重新编译
-- 电机报文 `0x18FF0182`（10ms）：输出转矩 = `raw−3000`（byte1-2）、当前转速 = `raw−15000`（byte3-4）、故障代码 = byte6、故障等级 = byte7 低 4 位
-
-### 曲线取值规则（详情视图）
-
-曲线的 Y 值 = 该报文**前 4 个字节**按所选字节序拼成的 32 位整数，例如报文
-`01 02 03 04 05 06 07 08`：
-
-| 选项 | 取值 | 说明 |
-|------|------|------|
-| 大端（默认） | `0x01020304` = 16909060 | 首字节是最高位，CAN 信号的常见约定 |
-| 小端 | `0x04030201` = 67305985 | 首字节是最低位 |
-
-- **有符号**勾选后按 `int32` 解释（`FF FF FF FF` = −1，`80 00 00 00` = −2147483648）
-- DLC 不足 4 字节时按实际字节数处理（如 `01 02` → 258），不做符号扩展
-- 曲线最多绘制**最近 1200 点**，更早的点仍保留在 `Table` 视图和统计中
+- 曲线环长 1024 点（50ms/点 ≈ 51s），日志页显示的是其中最近 400 点 ≈ 20s 窗
 
 ## Web API
 
 | 接口 | 说明 |
 |------|------|
-| `GET /api/messages` | 返回 `{rec:{on,cnt,cap,drop,ms,psram}, total, freqs:[{id,f}], messages:[{t,id,dlc,ext,data}], vi:[{t,c,v,f}]}`；`vi` 为 0x18FF0282 解码值（c/v 为物理值×10，f=电流哨兵故障） |
+| `GET /api/messages` | 返回 `{clk:{sync,boot,ep}, rec:{on,cnt,cap,drop,ms,psram}, total, freqs:[{id,f}], messages:[{t,id,dlc,ext,data}], vi:[{t,c,v,f,q,r,m}]}`；`vi` c/v 为物理值×10、q/r 为转矩(Nm)/转速(rpm)、m=电机值有效标志；服务端忙闸期间秒回 `{"busy":1}` |
+| `POST /api/time` | 浏览器授时：body `{epoch_ms, tz}`（UTC 毫秒 + 时区偏移分钟） |
 | `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended） |
 | `POST /api/clear` | 清空消息缓冲与频率统计 |
 | `POST /api/rec/start` | 开始录制（清空重新计时） |
 | `POST /api/rec/stop` | 停止录制（保留数据） |
 | `POST /api/rec/clear` | 清空录制缓冲 |
-| `GET /api/export` | CSV 流式下载全部录制数据（物理值列） |
+| `GET /api/export` | CSV 流式下载全部录制数据（物理值列，time 列已授时为真实时间） |
 
 ## 目录结构
 
@@ -113,8 +117,9 @@ main/
 ├── main.c             # 初始化：NVS → WiFi → CAN → 记录器 → Web → LED
 ├── can.c / can.h      # TWAI 驱动、RX 任务、每 ID 频率统计
 ├── can_logger.c/.h    # PSRAM 录制缓冲（双 ID 过滤，录满即停）
-├── signal_decode.c/.h # 0x18FF0182/0x18FF0282 信号解码 + 实时 V/I 环形缓冲
+├── signal_decode.c/.h # 0x18FF0182/0x18FF0282 信号解码 + 实时曲线环形缓冲（I/U/T/n 同时间基）
 ├── wifi.c / wifi.h    # WiFi SoftAP + mDNS + 客户端计数
+├── time_sync.c/.h     # 浏览器授时换算（真实时间戳）
 ├── led.c / led.h      # WS2812 状态灯（红=无客户端，炫彩=有客户端）
 ├── web_server.c       # HTTP 服务与 JSON API / CSV 导出
 ├── web_page.h         # 页面组装宏（拼接 web_head/web_body/web_js 三段源文件）
