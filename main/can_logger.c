@@ -172,21 +172,21 @@ void can_log_write(const can_msg_entry_t *entry)
     // 只录制目标报文 ID，其余直接忽略
     if (entry->id != SIG_ID_MOTOR_DRIVE && entry->id != SIG_ID_BUS_VI) return;
 
-    // 快路径：未满则写入（单写者无锁；count 后置保证读侧快照一致性）
-    uint32_t idx = s_log.count;
-    if (idx < s_log.capacity) {
-        s_log.base[idx] = *entry;
-        s_log.count = idx + 1;
-        return;
-    }
-
-    // 录满：走 mutex 明确终止（A4：停止状态机由锁保护，避免与读侧竞态）
+    // 全程持锁（A4 修订）：写入与 start/stop/clear 的状态机变更互斥。
+    // 之前的无锁快路径会与 start 的 count 清零交错——写侧拿着旧 idx 写入并
+    // 回写旧值+1，旧录制数据混进新录制。目标 ID 合计仅 ~150 条/秒，锁开销可忽略
     xSemaphoreTake(s_log.mutex, portMAX_DELAY);
     if (s_log.recording) {
-        s_log.recording = false;
-        s_log.stop_ms = now_ms();
-        s_log.dropped++;
-        ESP_LOGW(TAG, "Buffer full, recording stopped (count=%u)", (unsigned)s_log.count);
+        if (s_log.count < s_log.capacity) {
+            s_log.base[s_log.count] = *entry;
+            s_log.count++;
+        } else {
+            // 录满：停止录制（不覆盖不阻塞）
+            s_log.recording = false;
+            s_log.stop_ms = now_ms();
+            s_log.dropped++;
+            ESP_LOGW(TAG, "Buffer full, recording stopped (count=%u)", (unsigned)s_log.count);
+        }
     }
     xSemaphoreGive(s_log.mutex);
 }

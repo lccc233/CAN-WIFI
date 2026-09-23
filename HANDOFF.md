@@ -58,7 +58,8 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 - **录制缓冲** `can_logger.c`：`heap_caps_malloc(6MB, MALLOC_CAP_SPIRAM)`，
   约 314000 条（20 字节/条）。**录满自动停止**（不覆盖、不阻塞），dropped 计数；
   PSRAM 分配失败则 `psram_ok=false` 安全区降级——Record 返回 "PSRAM not available"，
-  监控功能完全不受影响。单写者模式：仅 RX 任务写，读侧（status/export）走 mutex 快照
+  监控功能完全不受影响。写侧仅 RX 任务；2026-09-23 起 `can_log_write` 全程持锁
+  （见安全加固节 E4）；读侧（status/export）走 mutex 快照
 - **信号解码** `signal_decode.c/h`（仅 /api/export CSV 物理值列使用）：
   - `SIG_LITTLE_ENDIAN 1` 宏控制 16 位原始值字节序（协议表未标注，实测不对切 0）
   - 电流哨兵值 0x2710 = 「U 相电流零漂故障」，CSV 仍导出原始值
@@ -118,7 +119,9 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
    烧录后需 `Ctrl+Shift+R` 才能看到新界面。
 4. 本机 Git Bash 下 `idf.py` 会因检测到 `MSYSTEM` 拒绝运行（shell profile 每次都会
    重新注入该变量，`unset` 无效），需在 Python 进程内 `os.environ.pop('MSYSTEM')`
-   后再调用 `idf.py`。
+   后再调用 `idf.py`。更省事的做法（2026-09-23 实测可用）：Git Bash 里直接
+   `cmd //c "set MSYSTEM=&& C:\Users\liche\esp\v5.3.1\esp-idf\export.bat >nul 2>&1 && idf.py build"`
+   ——cmd 会话内部 `set MSYSTEM=` 即取消定义，export.bat 的检测随之通过。
 5. **PSRAM 配置必须改 `sdkconfig.defaults`，不能手改 `sdkconfig`**（2026-09-18 踩坑）：
    手工往 `sdkconfig` 中间插入 SPIRAM 配置块，且块里混有 v5.3.1 不存在的符号
    （`CONFIG_SPIRAM_USE_HEAP` 等），构建时 kconfig 重写 sdkconfig 直接把整块丢弃 →
@@ -241,13 +244,48 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
   或用导入 JSON 恢复）；bin 0xEA270 → 0xF09C0，**分区仅剩 6%（63KB）——
   后续页面改动需优先考虑体积**
 
+## 安全加固与健壮性修复 (2026-09-23 第五轮)
+
+- **动机**：整体代码评审发现 1 个内存安全漏洞、1 条存储型 XSS 链与若干竞态；
+  按约定**明确不做**两项：`/api/send` 鉴权/CSRF 防护、WiFi 凭据入库（已知且接受）
+- **E1 RX DLC 钳位（内存安全漏洞）**：经典帧 DLC 9~15 线路上仍只有 8 字节数据
+  （CAN 规范按 8 处理），v5.3.1 TWAI 驱动 `twai_ll_parse_frame_buffer` 原样上报 DLC
+  却只填 8 字节 → `can.c` rx 任务 memcpy 越界 7 字节（idx=127 时溢出进 ring 的
+  head/mutex 字段），且 dlc=15 走 /api/export 会触发 sig_decode `assert(dlc<=8)`
+  直接 abort 重启（原注释"TWAI 驱动保证 ≤8"不成立）。修复：接收后一行 `>8 → 8`
+- **E2 存储 XSS 三层修复**：/api/signals 无鉴权可写 + 前端把 name/unit/color 未转义
+  拼 innerHTML → 局域网攻击者可投毒信号配置，受害者打开页面即执行任意 JS
+  （进而可静默刷 /api/send）。前端 `escHtml`（文本/双引号属性）、`escAttrJs`
+  （onclick 内 JS 字符串：`\`、`'` 先 JS 层，`&`、`"` 再 HTML 层——**`'` 用 `&#39;`
+  防护无效**，实体解码先于 JS 解析会被还原成引号逃逸）、`safeColor`（仅放行
+  #RGB 形式）、`csvSafe`（CSV 表头 `=+-@` 开头加 `'` 防公式执行）+ 数字字段
+  Number 强转；服务端 `signals_entry_valid`（id 0x hex 3~16 字符、name ≤64、
+  ≤64 条，畸形 400）；前端从设备/localStorage 加载配置时校验 id 格式
+- **E3 CORS**：/api/export 删 `Access-Control-Allow-Origin: *`（导航下载/curl
+  不受影响，仅关闭任意网站读取录制数据的门）
+- **E4 录制竞态**：`can_log_write` 全程持锁（原无锁快路径与 start/clear 的 count
+  清零交错，旧录制会混进新录制；目标 ID 合计 ~150 条/秒，锁开销可忽略）
+- **E5 忙闸原子化**：check-then-set 移入 portMUX 临界区（原 TOCTOU 两请求可同时
+  通过；3 秒看门狗语义保留）
+- **E6 HTTP 健壮性**：/api/send、/api/time 循环读满 body（原单次 recv，TCP 分段
+  截断 JSON）；`can_send_message` 钳位提前 + ID 范围校验（标准帧 ≤0x7FF /
+  扩展帧 ≤0x1FFFFFFF），无效返回 400
+- **E7 WiFi 退避重连**：断线前 5 次立即重连，之后 esp_timer 一次性定时器
+  1s→30s 指数退避（不在事件回调里 vTaskDelay，免卡事件循环）；GOT_IP 清计数并
+  取消残留定时器；`esp_timer` 组件加入 main REQUIRES（缺失时编译报错并提示）
+- **E8 杂项**：删无调用者 `can_get_total_received()`；/api/messages 消息序列化加
+  防御性边界（emitted 计数决定逗号前缀，单条被跳过 JSON 仍合法）；
+  wifi.c `sta_netif` 未用告警消除（DHCP 模式下该变量本就不用）
+- **验证**：全量重编 0 警告；web_js.h 抽出 `<script>` 后 `node --check` 通过；
+  未做真机回归（烧录后记得 Ctrl+Shift+R 强刷页面）
+
 ## 关键代码位置
 | 文件 | 说明 |
 |------|------|
-| `main/can.c` | TWAI 驱动初始化、RX 任务（挂接记录/解码钩子）、告警处理、发送 API |
+| `main/can.c` | TWAI 驱动初始化、RX 任务（DLC 钳位 + 记录写入）、告警处理、发送 API（ID 范围校验） |
 | `main/can_logger.c/.h` | PSRAM 录制缓冲：过滤 0x18FF0182/0x18FF0282、录满即停、buffer/status API |
 | `main/signal_decode.c/.h` | 电机/母线报文信号解码（字节序宏）、sig_is_record_id 录制过滤——仅 /api/export CSV 列在用 |
-| `main/wifi.c` | WiFi STA 连接/断线重连、连接状态、mDNS |
+| `main/wifi.c` | WiFi STA 连接/断线重连（指数退避）、连接状态、mDNS |
 | `main/led.c` | WS2812 状态灯（无客户端=红，有客户端=炫彩） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export |
 | `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_JS） |

@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -25,9 +26,30 @@ static httpd_handle_t s_server = NULL;
 
 // /api/messages 忙闸：同一时刻只处理一个 poll 请求，后续请求快速返回 busy
 // （C3）。若上一个 poll 客户端中途断开导致标志未释放，3 秒看门狗强制放行，
-// 防止整个轮询被永久卡死。
-static volatile bool s_busy_msgs = false;
-static volatile uint32_t s_busy_since_ms = 0;
+// 防止整个轮询被永久卡死。check-then-set 在临界区内完成，消除并发 TOCTOU。
+static portMUX_TYPE s_busy_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_busy_msgs = false;
+static uint32_t s_busy_since_ms = 0;
+
+static bool msgs_busy_try_acquire(uint32_t now_ms)
+{
+    bool acquired = false;
+    portENTER_CRITICAL(&s_busy_mux);
+    if (!s_busy_msgs || (uint32_t)(now_ms - s_busy_since_ms) >= 3000) {
+        s_busy_msgs = true;
+        s_busy_since_ms = now_ms;
+        acquired = true;
+    }
+    portEXIT_CRITICAL(&s_busy_mux);
+    return acquired;
+}
+
+static void msgs_busy_release(void)
+{
+    portENTER_CRITICAL(&s_busy_mux);
+    s_busy_msgs = false;
+    portEXIT_CRITICAL(&s_busy_mux);
+}
 
 // GET / — 返回 HTML 页面
 static esp_err_t root_handler(httpd_req_t *req)
@@ -40,17 +62,13 @@ static esp_err_t root_handler(httpd_req_t *req)
 // GET /api/messages — 返回 CAN 消息 JSON
 static esp_err_t api_messages_handler(httpd_req_t *req)
 {
-    // C3 忙闸：已有 poll 在处理中时快速返回，让客户端沿用本地数据。
-    // 看门狗：busy 超过 3 秒视为泄漏，强制放行重新处理。
-    uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-    if (s_busy_msgs && (uint32_t)(now_ms - s_busy_since_ms) < 3000) {
+    // C3 忙闸：已有 poll 在处理中时快速返回，让客户端沿用本地数据
+    if (!msgs_busy_try_acquire((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS))) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Cache-Control", "no-store");
         httpd_resp_sendstr(req, "{\"busy\":1}");
         return ESP_OK;
     }
-    s_busy_msgs = true;
-    s_busy_since_ms = now_ms;
 
     can_msg_entry_t snapshot[CAN_RX_RING_SIZE];
     uint32_t count, total;
@@ -100,29 +118,41 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
 
     httpd_resp_sendstr_chunk(req, "],\"messages\":[");
 
+    // emitted 而非 i 决定逗号前缀：某条因防御性检查被跳过时 JSON 仍合法
+    uint32_t emitted = 0;
     for (uint32_t i = 0; i < count; i++) {
         char entry[160];
+        bool ok = true;
         int n = snprintf(entry, sizeof(entry),
             "%s{\"t\":%lu,\"id\":\"0x%lX\",\"dlc\":%d,\"ext\":%s,\"data\":\"",
-            (i > 0) ? "," : "",
+            (emitted > 0) ? "," : "",
             (unsigned long)snapshot[i].timestamp_ms,
             (unsigned long)snapshot[i].id,
             snapshot[i].dlc,
             snapshot[i].extended ? "true" : "false");
-
-        for (int j = 0; j < snapshot[i].dlc && j < 8; j++) {
-            n += snprintf(entry + n, sizeof(entry) - n, "%02X", snapshot[i].data[j]);
-            if (j < snapshot[i].dlc - 1) {
-                entry[n++] = ' ';
+        // 数据段上限 8*3-1=23 字符 + 结尾 "\"}" + NUL 共 26；字段均有界时
+        // 正常最大 ~90 字符，远用不到该余量——纯防御，防截断后 n 越界
+        if (n < 0 || (size_t)n + 27 > sizeof(entry)) ok = false;
+        for (int j = 0; ok && j < snapshot[i].dlc && j < 8; j++) {
+            if (j > 0) entry[n++] = ' ';
+            if (snprintf(entry + n, sizeof(entry) - n, "%02X", snapshot[i].data[j]) != 2) {
+                ok = false;
+                break;
             }
+            n += 2;
         }
-        snprintf(entry + n, sizeof(entry) - n, "\"}");
-        httpd_resp_sendstr_chunk(req, entry);
+        if (ok) {
+            entry[n++] = '"';
+            entry[n++] = '}';
+            entry[n] = '\0';
+            httpd_resp_sendstr_chunk(req, entry);
+            emitted++;
+        }
     }
 
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
-    s_busy_msgs = false;
+    msgs_busy_release();
     return ESP_OK;
 }
 
@@ -133,6 +163,26 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
 #define SIGNALS_NVS_NS     "webui"
 #define SIGNALS_NVS_KEY    "signals"
 #define SIGNALS_MAX_BYTES  3500
+#define SIGNALS_MAX_ITEMS  64
+
+// POST body 的单条配置校验：对象；id 为 0x 开头十六进制字符串（3~16 字符）；
+// name 为字符串（≤64 字符）。其余字段不限定（总大小另有 SIGNALS_MAX_BYTES 上限）。
+// 该接口局域网内无鉴权可写，畸形数据挡在 NVS 门外（前端渲染另有转义兜底）
+static bool signals_entry_valid(const cJSON *item)
+{
+    if (!cJSON_IsObject(item)) return false;
+    const cJSON *jid = cJSON_GetObjectItem(item, "id");
+    const cJSON *jname = cJSON_GetObjectItem(item, "name");
+    if (!cJSON_IsString(jname) || strlen(jname->valuestring) > 64) return false;
+    if (!cJSON_IsString(jid)) return false;
+    const char *p = jid->valuestring;
+    size_t len = strlen(p);
+    if (len < 3 || len > 16 || p[0] != '0' || (p[1] != 'x' && p[1] != 'X')) return false;
+    for (p += 2; *p; p++) {
+        if (!isxdigit((unsigned char)*p)) return false;
+    }
+    return true;
+}
 
 static esp_err_t api_signals_handler(httpd_req_t *req)
 {
@@ -175,6 +225,17 @@ static esp_err_t api_signals_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         int n = cJSON_GetArraySize(root);
+        bool valid = (n <= SIGNALS_MAX_ITEMS);
+        for (int i = 0; valid && i < n; i++) {
+            valid = signals_entry_valid(cJSON_GetArrayItem(root, i));
+        }
+        if (!valid) {
+            cJSON_Delete(root);
+            nvs_close(nvs);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "Bad signal entry (need id 0x.. and name)");
+            return ESP_FAIL;
+        }
         char *compact = cJSON_PrintUnformatted(root);
         cJSON_Delete(root);
         esp_err_t err = ESP_OK;
@@ -233,12 +294,17 @@ static esp_err_t api_signals_handler(httpd_req_t *req)
 static esp_err_t api_send_handler(httpd_req_t *req)
 {
     char body[256];
-    int len = httpd_req_recv(req, body, sizeof(body) - 1);
-    if (len <= 0) {
+    // 循环读满 body：TCP 分段时一次 recv 可能只拿到半截（对齐 /api/signals 读法）
+    int total = 0, recvd;
+    while (total < (int)(sizeof(body) - 1) &&
+           (recvd = httpd_req_recv(req, body + total, sizeof(body) - 1 - total)) > 0) {
+        total += recvd;
+    }
+    if (total <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;
     }
-    body[len] = '\0';
+    body[total] = '\0';
 
     cJSON *root = cJSON_Parse(body);
     if (!root) {
@@ -276,6 +342,10 @@ static esp_err_t api_send_handler(httpd_req_t *req)
     }
 
     esp_err_t ret = can_send_message(id, extended, dlc, data);
+    if (ret == ESP_ERR_INVALID_ARG) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid id/dlc");
+        return ESP_FAIL;
+    }
     if (ret != ESP_OK) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"TX failed\"}");
@@ -300,12 +370,17 @@ static esp_err_t api_clear_handler(httpd_req_t *req)
 static esp_err_t api_time_handler(httpd_req_t *req)
 {
     char body[128];
-    int len = httpd_req_recv(req, body, sizeof(body) - 1);
-    if (len <= 0) {
+    // 循环读满 body（同 /api/send）
+    int total = 0, recvd;
+    while (total < (int)(sizeof(body) - 1) &&
+           (recvd = httpd_req_recv(req, body + total, sizeof(body) - 1 - total)) > 0) {
+        total += recvd;
+    }
+    if (total <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;
     }
-    body[len] = '\0';
+    body[total] = '\0';
 
     char *p = strstr(body, "\"epoch_ms\"");
     if (!p) {
@@ -405,7 +480,6 @@ static esp_err_t api_export_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "text/csv; charset=utf-8");
     httpd_resp_set_hdr(req, "Content-Disposition",
                        "attachment; filename=\"can_log.csv\"");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
     // CSV 表头（0x18FF0182 填转矩/转速/故障列，0x18FF0282 填电流/电压列）

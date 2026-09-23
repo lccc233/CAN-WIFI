@@ -31,7 +31,8 @@
   - 日常使用建议用**自定义曲线页的前端记录器**（记录已配置信号的解码值，导出宽表 CSV）
 - **WiFi STA**：连接现有路由器/热点 `lc`（密码 `12345678`），IP 由 DHCP 自动分配
   （启动串口日志 `Got IP: x.x.x.x` 查看，手机热点管理页也能看到已连设备）；
-  `can-monitor.local` 也可访问；固定 IP 可选：`wifi.h` 里 `WIFI_STA_STATIC_IP=1`
+  `can-monitor.local` 也可访问；断线自动重连（前 5 次立即重试，之后 1s→30s 指数退避）；
+  固定 IP 可选：`wifi.h` 里 `WIFI_STA_STATIC_IP=1`
 - **状态灯**（WS2812，GPIO48）：**未连上路由器 → 红灯常亮；连上（拿到 IP）→ 炫彩**（色相循环）
 
 ## 硬件
@@ -119,13 +120,13 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 |------|------|
 | `GET /api/messages` | 返回 `{clk:{sync,boot,ep}, rec:{on,cnt,cap,drop,ms,psram}, total, freqs:[{id,f}], messages:[{t,id,dlc,ext,data}]}`；服务端忙闸期间秒回 `{"busy":1}` |
 | `POST /api/time` | 浏览器授时：body `{epoch_ms, tz}`（UTC 毫秒 + 时区偏移分钟） |
-| `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended） |
+| `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended）；id 越界（标准帧 >0x7FF / 扩展帧 >0x1FFFFFFF）或 dlc 非法时返回 400 |
 | `POST /api/clear` | 清空消息缓冲与频率统计 |
 | `POST /api/rec/start` | 开始 PSRAM 原始帧录制（无页面 UI，curl 备用） |
 | `POST /api/rec/stop` | 停止录制（保留数据） |
 | `POST /api/rec/clear` | 清空录制缓冲 |
 | `GET /api/signals` | 自定义曲线信号配置：返回存储的 JSON 数组（未存过返回 `[]`） |
-| `POST /api/signals` | 保存信号配置到设备 NVS（body 为配置数组，上限 ~3500 字节，响应 `{"ok":true,"n":N}`）；页面每次改动自动保存 |
+| `POST /api/signals` | 保存信号配置到设备 NVS（body 为配置数组，逐条校验：id 为 0x 开头十六进制 ≤16 字符、name ≤64 字符、最多 64 条，不合法返回 400；上限 ~3500 字节，响应 `{"ok":true,"n":N}`）；页面每次改动自动保存 |
 | `GET /api/export` | CSV 流式下载全部录制数据（物理值列，time 列已授时为真实时间） |
 
 ## 目录结构

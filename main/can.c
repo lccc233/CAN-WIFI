@@ -46,11 +46,6 @@ void can_clear_ring(void)
     xSemaphoreGive(g_freq_mutex);
 }
 
-uint32_t can_get_total_received(void)
-{
-    return g_ring.count;
-}
-
 void can_get_snapshot(can_msg_entry_t *out, uint32_t max_entries,
                       uint32_t *out_count, uint32_t *out_total)
 {
@@ -135,13 +130,16 @@ int can_get_id_freqs(can_id_freq_t *out, int max_ids)
 
 esp_err_t can_send_message(uint32_t id, bool extended, uint8_t dlc, const uint8_t *data)
 {
+    if (dlc > 8) dlc = 8;   // 钳位必须在填 data_length_code 之前
+    if (extended ? (id > 0x1FFFFFFFu) : (id > 0x7FFu)) {
+        return ESP_ERR_INVALID_ARG;   // 扩展帧 29 位 / 标准帧 11 位
+    }
     twai_message_t msg = {
         .identifier = id,
         .extd = extended ? 1 : 0,
         .rtr = 0,
         .data_length_code = dlc,
     };
-    if (dlc > 8) dlc = 8;
     memcpy(msg.data, data, dlc);
 
     xSemaphoreTake(g_send_mutex, portMAX_DELAY);
@@ -163,6 +161,9 @@ static void can_rx_task(void *arg)
 
     while (1) {
         if (twai_receive(&rx_msg, pdMS_TO_TICKS(100)) == ESP_OK) {
+            // 经典帧 DLC 9~15 在线路上仍只有 8 字节数据（CAN 规范按 8 处理），
+            // 驱动会原样上报 DLC 而只填 8 字节，必须钳位防下方 memcpy 越界
+            if (rx_msg.data_length_code > 8) rx_msg.data_length_code = 8;
             uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
             xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
             uint32_t idx = g_ring.head & (CAN_RX_RING_SIZE - 1);

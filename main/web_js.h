@@ -187,7 +187,31 @@ var stripRefs = [];
 
 function normId(id) { return String(id || '').toLowerCase(); }
 function sigKey(s) { return s.id + '|' + s.name; }
-function keyAttr(s) { return (s.id + '|' + s.name).replace(/&/g, '&amp;').replace(/'/g, '&#39;'); }
+
+// ---- 注入防护：信号配置可来自设备 NVS / 导入文件（局域网内任何人可写）， ----
+// ---- 所有用户可控字段进 innerHTML / CSV 前必须经过以下处理 ----
+// 文本与双引号属性上下文的 HTML 转义
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// onclick="fn('...')" 上下文：先 JS 字符串层（\ 和 '），再 HTML 属性层（& 和 "）。
+// 注意 HTML 实体解码发生在 JS 解析之前，' 必须用 \' 防护，&#39; 会被还原成引号逃逸
+function escAttrJs(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+                  .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+// 颜色只放行 #RGB/#RRGGBB（含 3~8 位十六进制）形式，其余替换为中性色
+function safeColor(c) {
+  return /^#[0-9a-fA-F]{3,8}$/.test(String(c)) ? c : '#888888';
+}
+// CSV 单元格：分隔符替换为下划线；= + - @ 开头加 ' 前缀，防 Excel 当公式执行
+function csvSafe(s) {
+  var v = String(s).replace(/[,;\r\n]/g, '_');
+  if (/^[=+\-@\t]/.test(v)) v = "'" + v;
+  return v;
+}
+function keyAttr(s) { return escAttrJs(s.id + '|' + s.name); }
 function toHex(bytes) {
   var out = '';
   for (var i = 0; i < bytes.length; i++) {
@@ -262,7 +286,7 @@ function loadCfgFromDevice() {
       var arr = Array.isArray(d) ? d : [];
       if (arr.length) {
         for (var i = 0; i < arr.length; i++) {
-          if (!arr[i] || !arr[i].id) return;   // 数据不合法，放弃本次拉取
+          if (!arr[i] || !/^0x[0-9a-fA-F]+$/.test(String(arr[i].id || ''))) return;   // 数据不合法，放弃本次拉取
           arr[i].id = normId(arr[i].id);
         }
         var before = localStorage.getItem(CFG_KEY);
@@ -284,9 +308,13 @@ function loadCfg() {
     var s = localStorage.getItem(CFG_KEY);
     if (s) {
       var arr = JSON.parse(s);
-      if (arr && arr.length && arr[0] && arr[0].id) {
+      var ok = !!(arr && arr.length);
+      for (var i = 0; ok && i < arr.length; i++) {
+        ok = !!arr[i] && /^0x[0-9a-fA-F]+$/.test(String(arr[i].id || ''));
+      }
+      if (ok) {
         configs = arr;
-        for (var i = 0; i < configs.length; i++) configs[i].id = normId(configs[i].id);
+        for (var j = 0; j < configs.length; j++) configs[j].id = normId(configs[j].id);
         return;
       }
     }
@@ -336,7 +364,7 @@ function colorizeData(id, dataHex) {
     for (var k = 0; k < sigs.length; k++) {
       if (sigBytesCovered(sigs[k])[j]) { owner = sigs[k]; break; }
     }
-    if (owner) html += '<span style="background:' + owner.color + '33;border-bottom:2px solid ' + owner.color + '">' + bytes[j] + '</span>';
+    if (owner) html += '<span style="background:' + safeColor(owner.color) + '33;border-bottom:2px solid ' + safeColor(owner.color) + '">' + bytes[j] + '</span>';
     else html += bytes[j];
     if (j < bytes.length - 1) html += ' ';
   }
@@ -427,8 +455,8 @@ function curveRecExportCsv() {
   var lines = [];
   var head = 'no,time_rel_ms';
   for (var h = 0; h < sigs.length; h++) {
-    head += ',' + sigs[h].s.name.replace(/[,\s]/g, '_')
-      + (sigs[h].s.unit ? '(' + sigs[h].s.unit + ')' : '') + '@' + sigs[h].s.id;
+    head += ',' + csvSafe(sigs[h].s.name)
+      + (sigs[h].s.unit ? '(' + csvSafe(sigs[h].s.unit) + ')' : '') + '@' + sigs[h].s.id;
   }
   lines.push(head);
   for (var e = 0; e < tU.length; e++) {
@@ -491,14 +519,14 @@ function renderSigList() {
     var hist = histById[id];
     if (hist && hist.length) {
       var v = decodePoint(hist[hist.length - 1], s);
-      latest = (v === null ? '(无效)' : fmtVal(v) + ' ' + s.unit);
+      latest = (v === null ? '(无效)' : fmtVal(v) + ' ' + escHtml(s.unit));
     }
     html += '<div class="sigrow">'
-      + '<span class="cdot" style="background:' + s.color + '"></span>'
+      + '<span class="cdot" style="background:' + safeColor(s.color) + '"></span>'
       + '<input type="checkbox" ' + (s.enabled ? 'checked' : '') + ' onchange="toggleSig(\'' + keyAttr(s) + '\')">'
-      + '<span class="signame">' + s.name + '</span>'
-      + '<span class="sigdef">start=' + s.start + ' len=' + s.len + ' ' + (s.endian === 'intel' ? 'Intel' : 'Motorola')
-      + ' ' + (s.signed ? 'signed' : 'unsigned') + ' ×' + s.factor + ' +' + s.offset + '</span>'
+      + '<span class="signame">' + escHtml(s.name) + '</span>'
+      + '<span class="sigdef">start=' + (+s.start) + ' len=' + (+s.len) + ' ' + (s.endian === 'intel' ? 'Intel' : 'Motorola')
+      + ' ' + (s.signed ? 'signed' : 'unsigned') + ' ×' + (+s.factor) + ' +' + (+s.offset) + '</span>'
       + '<span class="sigval">' + latest + '</span>'
       + '<button onclick="editSig(\'' + keyAttr(s) + '\')">编辑</button>'
       + '<button class="btn danger" onclick="delSig(\'' + keyAttr(s) + '\')">删除</button>'
@@ -607,10 +635,10 @@ function buildChartList() {
     var key = keyAttr(s);
     html += '<div class="strip" id="strip_' + i + '">'
       + '<div class="strip-head">'
-      + '<span class="cdot" style="background:' + s.color + '"></span>'
+      + '<span class="cdot" style="background:' + safeColor(s.color) + '"></span>'
       + '<input type="checkbox" ' + (s.enabled ? 'checked' : '') + ' onchange="toggleSig(\'' + key + '\');buildChartList();renderCharts();">'
-      + '<span class="signame">' + s.name + '</span>'
-      + '<span class="sigdef">@' + s.id + (s.unit ? ' (' + s.unit + ')' : '') + '</span>'
+      + '<span class="signame">' + escHtml(s.name) + '</span>'
+      + '<span class="sigdef">@' + escHtml(s.id) + (s.unit ? ' (' + escHtml(s.unit) + ')' : '') + '</span>'
       + '<span class="sigval" id="lv_' + i + '">-</span>'
       + '<button onclick="editSig(\'' + key + '\')">编辑</button>'
       + '<button class="btn danger" onclick="delSig(\'' + key + '\')">删除</button>'
