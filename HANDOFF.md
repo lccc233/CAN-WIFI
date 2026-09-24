@@ -8,7 +8,7 @@
 - **CAN 收发器**: SIT1042AQT/3（STB 接地，VCC 5V，**VIO 接 3.3V**）
 
 ## 项目功能
-1. **WiFi STA** (连接现有路由器 `lc`，密码 12345678，断线自动重连，mDNS: can-monitor.local)
+1. **WiFi STA** (连接手机热点 `ABCDEF`，密码 A12345678，固定 IP 192.168.43.250，断线自动重连，mDNS: can-monitor.local)
 2. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
 3. **网页 CAN 工具** (HTTP Server，表格显示收发 CAN 消息)
 4. **曲线页** (顶层页签：自定义曲线=任意 ID 用户定义信号，每信号一条曲线带；详情视图仅剩原始报文表)
@@ -44,9 +44,11 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 ## 当前代码状态
 - 多文件架构：`main.c`, `can.c`, `can_logger.c`, `signal_decode.c`, `wifi.c`, `web_server.c`, `web_page.h`, `led.c`
 - TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO5，RX=GPIO4
-- WiFi STA 模式连接路由器/热点 `lc`（密码 12345678）；**IP 由 DHCP 自动分配**
-  （启动串口日志 `Got IP:` 查看；固定 IP 可选：`wifi.h` `WIFI_STA_STATIC_IP=1`，
-  备用静态值 10.31.134.250/网关 10.31.134.224 已存好）；mDNS: `can-monitor.local`
+- WiFi STA 模式连接手机热点 `ABCDEF`（密码 A12345678）；**固定 IP 192.168.43.250**
+  （`wifi.h` `WIFI_STA_STATIC_IP=1`，网关 192.168.43.1 / 掩码 255.255.255.0；
+  Android 热点 DHCP 池一般从 .2 起分配，.250 冲突概率低。若热点网段变化——部分
+  安卓会随机化网段——设备将不可达，改回 `WIFI_STA_STATIC_IP=0` 重烧即回 DHCP）；
+  mDNS: `can-monitor.local`
 - 网页 200ms 轮询：监控表 + 详情曲线/Table + 顶层「电压电流曲线」页 + 录制控制/状态显示
 
 ## PSRAM 记录仪 (2026-09-18)

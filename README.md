@@ -29,10 +29,9 @@
   - 浏览器直接访问 `http://<设备IP>/api/export` 下载物理值 CSV：
     `no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
   - 日常使用建议用**自定义曲线页的前端记录器**（记录已配置信号的解码值，导出宽表 CSV）
-- **WiFi STA**：连接现有路由器/热点 `lc`（密码 `12345678`），IP 由 DHCP 自动分配
-  （启动串口日志 `Got IP: x.x.x.x` 查看，手机热点管理页也能看到已连设备）；
-  `can-monitor.local` 也可访问；断线自动重连（前 5 次立即重试，之后 1s→30s 指数退避）；
-  固定 IP 可选：`wifi.h` 里 `WIFI_STA_STATIC_IP=1`
+- **WiFi STA**：连接手机热点 `ABCDEF`（密码 `A12345678`），
+  **固定 IP `192.168.43.250`**（网关 192.168.43.1，`wifi.h` 静态配置，网页地址不变）；
+  `can-monitor.local` 也可访问；断线自动重连（前 5 次立即重试，之后 1s→30s 指数退避）
 - **状态灯**（WS2812，GPIO48）：**未连上路由器 → 红灯常亮；连上（拿到 IP）→ 炫彩**（色相循环）
 
 ## 硬件
@@ -71,11 +70,10 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 
 ## 使用
 
-1. 手机/电脑连接 WiFi 路由器 **`lc`**（密码 `12345678`），设备上电后自动加入同一热点
+1. 手机/电脑连接热点 **`ABCDEF`**（密码 `A12345678`），设备上电后自动加入同一热点
    - **注意**：`CONFIG_SPIRAM_MEMTEST=y` 会让上电慢几秒（PSRAM 内存测试），正常
-   - 设备 IP 由热点 DHCP 自动分配：启动串口日志看 `Got IP: x.x.x.x`，
-     手机热点管理页也会列出已连设备及其 IP
-2. 浏览器打开 `http://<设备IP>`（每次开机看日志确认）或 `http://can-monitor.local`
+   - 设备固定 IP `192.168.43.250`（无需查日志；热点管理页也会列出已连设备）
+2. 浏览器打开 `http://192.168.43.250` 或 `http://can-monitor.local`
 3. 在底部发送区填写 ID / DLC / Data 即可向总线发送 CAN 帧（该发送面板只在 CAN Monitor 页显示）
 4. **看报表**：点主表格里任意一行 → 该 ID 的原始报文历史表，左上 Back to List 返回
 5. **自定义曲线**：详情页「+ 添加曲线」定义信号
