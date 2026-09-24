@@ -39,11 +39,11 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 3. **外部物理引脚 TX/RX 分离测试** — 之前失败（电平问题，已解决）
 
 ### 已验证的 GPIO 组合
-- GPIO5(TX) + GPIO4(RX) — 当前使用，VIO 接 3.3V 后正常
+- GPIO15(TX) + GPIO16(RX) — 当前使用（VIO 接 3.3V 后正常；早期验证用 GPIO5+GPIO4）
 
 ## 当前代码状态
 - 多文件架构：`main.c`, `can.c`, `can_logger.c`, `signal_decode.c`, `wifi.c`, `web_server.c`, `web_page.h`, `led.c`
-- TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO5，RX=GPIO4
+- TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO15，RX=GPIO16
 - WiFi STA 模式连接手机热点 `ABCDEF`（密码 A12345678）；**固定 IP 192.168.43.250**
   （`wifi.h` `WIFI_STA_STATIC_IP=1`，网关 192.168.43.1 / 掩码 255.255.255.0；
   Android 热点 DHCP 池一般从 .2 起分配，.250 冲突概率低。若热点网段变化——部分

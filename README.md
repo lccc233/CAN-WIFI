@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO5，RX=GPIO4
+- **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO15，RX=GPIO16
 - **Web 实时界面**（HTTP Server，页面 200ms 轮询刷新）：
   - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **自定义曲线**（任意 ID 自定义信号）
   - 按 ID 分组展示最新消息（**按 ID 从小到大排序**），列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
@@ -44,8 +44,8 @@
 - **接线**：
   | 功能 | GPIO |
   |------|------|
-  | CAN TX | GPIO5 |
-  | CAN RX | GPIO4 |
+  | CAN TX | GPIO15 |
+  | CAN RX | GPIO16 |
   | WS2812 DIN | GPIO48 |
 - **供电/烧录**：USB 线接板载 USB-Serial/JTAG 口
 

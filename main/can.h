@@ -6,8 +6,8 @@
 #include "driver/twai.h"
 
 // TWAI 引脚
-#define TWAI_TX_GPIO  5
-#define TWAI_RX_GPIO  4
+#define TWAI_TX_GPIO  15
+#define TWAI_RX_GPIO  16
 
 // 环形缓冲大小（必须是 2 的幂）
 #define CAN_RX_RING_SIZE  128
