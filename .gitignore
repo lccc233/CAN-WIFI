@@ -20,6 +20,10 @@ dependencies.lock
 
 # ---- 本地工具状态 ----
 .claude/
+.zcode/
+
+# ---- 本地测试 / 刷写固件 ----
+/pcan_test/
 
 # ---- Python ----
 __pycache__/
@@ -29,3 +33,6 @@ __pycache__/
 # ---- 操作系统 ----
 Thumbs.db
 .DS_Store
+
+# ---- 发布包 ----
+/release/
