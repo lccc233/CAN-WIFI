@@ -1,19 +1,23 @@
 # 交接文档：ESP32-S3 CAN Bus Monitor
 
 ## 项目信息
-- **路径**: `C:\Users\liche\esp32s3\CAN-WIFI`（原名 `led_strip_rmt_ws2812`）
-- **主文件**: `main/main.c`, `main/can.c`, `main/can_logger.c`, `main/signal_decode.c`, `main/wifi.c`, `main/web_server.c`, `main/web_page.h`, `main/led.c`
-- **ESP-IDF 版本**: 5.3.1，路径 `C:\Users\liche\esp\v5.3.1\esp-idf`
+- **路径**: `C:\Users\Administrator\.zcode\workspace\default\CAN-WIFI`
+- **主文件**: `main/main.c`, `main/can.c`, `main/can_logger.c`, `main/signal_decode.c`, `main/wifi.c`, `main/serial_cli.c`, `main/web_server.c`, `main/web_page.h`, `main/led.c`
+- **ESP-IDF 版本**: 5.3.5，路径 `C:\esp\v5.3.5\esp-idf`（EIM 管理：激活脚本
+  `C:\Espressif\tools\Microsoft.v5.3.5.PowerShell_profile.ps1`，工具链/venv 在 `C:\Espressif\tools`）
 - **开发板**: ESP32-S3-DevKitC（模组 N16R8，8MB 八线 PSRAM）
 - **CAN 收发器**: SIT1042AQT/3（STB 接地，VCC 5V，**VIO 接 3.3V**）
 
 ## 项目功能
-1. **WiFi STA** (连接手机热点 `ABCDEF`，密码 A12345678，固定 IP 192.168.43.250，断线自动重连，mDNS: can-monitor.local)
-2. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
-3. **网页 CAN 工具** (HTTP Server，表格显示收发 CAN 消息)
-4. **曲线页** (顶层页签：自定义曲线=任意 ID 用户定义信号，每信号一条曲线带；详情视图仅剩原始报文表)
-5. **信号解码** (设备端仅 /api/export CSV 物理值列用；页面曲线全部浏览器解码)
-6. **状态灯** (WS2812 GPIO48：未连上路由器=红灯常亮，连上=炫彩)
+1. **WiFi 双模式**（AP/STA 经串口切换，配置存 NVS；断线自动重连，mDNS: can-monitor.local）：
+   STA 连接串口指定的热点（默认 `ABCDEF`/`A12345678`），IP 默认**自动绑定同网段 .250**；
+   AP 模式自建热点 `CAN-Monitor-XXXX`（密码 12345678），设备 IP 192.168.4.1
+2. **串口配置台**（`serial_cli.c`，UART0/USB 串口均可输入：help/info/mode/ssid/pass/ip/reboot）
+3. **CAN 总线监控** (TWAI 驱动, 250kbps, NORMAL 模式)
+4. **网页 CAN 工具** (HTTP Server，表格显示收发 CAN 消息)
+5. **曲线页** (顶层页签：自定义曲线=任意 ID 用户定义信号，每信号一条曲线带；详情视图仅剩原始报文表)
+6. **信号解码** (设备端仅 /api/export CSV 物理值列用；页面曲线全部浏览器解码)
+7. **状态灯** (WS2812 GPIO48：未连上路由器/热点未运行=红灯常亮，连上/热点运行=炫彩)
 
 ## CAN 不通根因 (2026-07-29)
 
@@ -42,13 +46,13 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 - GPIO15(TX) + GPIO16(RX) — 当前使用（VIO 接 3.3V 后正常；早期验证用 GPIO5+GPIO4）
 
 ## 当前代码状态
-- 多文件架构：`main.c`, `can.c`, `can_logger.c`, `signal_decode.c`, `wifi.c`, `web_server.c`, `web_page.h`, `led.c`
+- 多文件架构：`main.c`, `can.c`, `can_logger.c`, `signal_decode.c`, `wifi.c`, `serial_cli.c`,
+  `web_server.c`, `web_page.h`, `led.c`
 - TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO15，RX=GPIO16
-- WiFi STA 模式连接手机热点 `ABCDEF`（密码 A12345678）；**固定 IP 192.168.43.250**
-  （`wifi.h` `WIFI_STA_STATIC_IP=1`，网关 192.168.43.1 / 掩码 255.255.255.0；
-  Android 热点 DHCP 池一般从 .2 起分配，.250 冲突概率低。若热点网段变化——部分
-  安卓会随机化网段——设备将不可达，改回 `WIFI_STA_STATIC_IP=0` 重烧即回 DHCP）；
-  mDNS: `can-monitor.local`
+- WiFi 双模式（2026-09-24 起配置存 NVS，命名空间 `wificfg`，串口命令可改，见第六轮节）：
+  STA 默认连 `ABCDEF`/`A12345678`，IP 规则默认**自动绑定同网段 .250**（DHCP 拿到 IP 后
+  在 GOT_IP 事件里改绑，网段变了自适应）；AP 模式热点 `CAN-Monitor-XXXX`（密码 12345678，
+  IP 192.168.4.1）；mDNS: `can-monitor.local`
 - 网页 200ms 轮询：监控表 + 详情曲线/Table + 顶层「电压电流曲线」页 + 录制控制/状态显示
 
 ## PSRAM 记录仪 (2026-09-18)
@@ -119,11 +123,15 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
    `ls -la build/can_monitor.bin` 应新于 `main/` 下的源文件。曾因烧了旧固件而白排查一轮。
 3. **前端改动后浏览器要强刷**：`web_page.h` 是编进固件的，但浏览器会缓存页面，
    烧录后需 `Ctrl+Shift+R` 才能看到新界面。
-4. 本机 Git Bash 下 `idf.py` 会因检测到 `MSYSTEM` 拒绝运行（shell profile 每次都会
-   重新注入该变量，`unset` 无效），需在 Python 进程内 `os.environ.pop('MSYSTEM')`
-   后再调用 `idf.py`。更省事的做法（2026-09-23 实测可用）：Git Bash 里直接
-   `cmd //c "set MSYSTEM=&& C:\Users\liche\esp\v5.3.1\esp-idf\export.bat >nul 2>&1 && idf.py build"`
-   ——cmd 会话内部 `set MSYSTEM=` 即取消定义，export.bat 的检测随之通过。
+4. **Git Bash 下 `idf.py` 因 `MSYSTEM` 静默空跑（2026-09-24 确认，比想象更隐蔽）**：
+   `idf.py` 检测到 `MSYSTEM` 只打印一行 "MSys/Mingw is no longer supported ... continue at
+   your own risk" 警告，**然后直接跳过 main()，exit 0，什么都不做**（`idf.py:835-855` 的
+   if/elif/else，MSYSTEM 分支不调 main）——不报错、无输出，极易误以为编译成功。
+   shell profile 每次都会重新注入该变量，`env -u` 无效。**可行做法**：PowerShell 里先
+   `Remove-Item Env:\MSYSTEM` 再 `idf.py build`；环境激活用 EIM 的
+   `. 'C:\Espressif\tools\Microsoft.v5.3.5.PowerShell_profile.ps1'`（一条龙示例：
+   powershell -NoProfile -ExecutionPolicy Bypass -Command ". <激活脚本> | Out-Null;
+   Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue; cd <项目>; idf.py build"）
 5. **PSRAM 配置必须改 `sdkconfig.defaults`，不能手改 `sdkconfig`**（2026-09-18 踩坑）：
    手工往 `sdkconfig` 中间插入 SPIRAM 配置块，且块里混有 v5.3.1 不存在的符号
    （`CONFIG_SPIRAM_USE_HEAP` 等），构建时 kconfig 重写 sdkconfig 直接把整块丢弃 →
@@ -281,18 +289,93 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 - **验证**：全量重编 0 警告；web_js.h 抽出 `<script>` 后 `node --check` 通过；
   未做真机回归（烧录后记得 Ctrl+Shift+R 强刷页面）
 
+## 串口配置台 + WiFi 双模式 (2026-09-24 第六轮)
+
+- **动机**：WiFi 配置从编译期硬编码（改 SSID/IP 要重烧固件）改为**串口命令 + NVS 持久化**；
+  新增 AP 模式与模式切换、IP「自动绑定同网段 .250」、`info` 状态查询。
+  （第五轮"明确不做 WiFi 凭据入库"的决定按用户新需求推翻：凭据现明文存 NVS `wificfg`，
+  与 webui/signals 命名空间互不影响，接受此风险）
+- **wifi.c 重写**：
+  - 配置结构：`s_cfg_mode`(STA/AP)、`s_ip_mode`(AUTO_250/STATIC)、`s_sta_ssid/pass`、
+    `s_static_ip`；`cfg_load()` NVS 为空时用 wifi.h 默认宏（**首次烧录行为与旧硬编码等价**）
+  - `wifi_init()` 按 NVS mode 分派 `wifi_init_sta()`/`wifi_init_ap()`（AP: 
+    `CAN-Monitor-%02X%02X`(softAP MAC 后 2 字节) + 12345678 + WPA2 + 4 客户端，
+    网默认 IP 192.168.4.1，HTTP 照常可用）
+  - **IP 自动绑定**：GOT_IP 事件里 `wifi_rebind_ip()`——AUTO_250 取 `(ip&mask)|250`，
+    STATIC 用固定 IP+/24 掩码+同网段 .1 网关；先取 DHCP 下发的 DNS 再停 DHCP，
+    改绑后事件会再次到来，用 `s_ip_rebinding` 标志防递归（旧 `WIFI_STA_STATIC_IP`
+    编译期方案删除——先 DHCP 后改绑，顺带解决"热点网段变化设备失联"）
+  - `wifi_is_connected()` AP 模式返回 AP 启动状态 → **led.c 无需改动**
+  - 状态查询 `wifi_get_status()`（模式/SSID/RSSI/信道/客户端数/IP/MAC）供 info 命令
+- **serial_cli.c（新增）**：
+  - **双串口输入的关键**（不改 sdkconfig，主控台仍=UART0 副控台=USJ）：
+    IDF 控制台 VFS 的 `console_read` 只读主控台（`vfs_console.c:114`，副控台仅输出）。
+    **输入不走 VFS**（2026-09-25 真机踩坑）：未装 USJ 驱动时，VFS 非阻塞读
+    `usb_serial_jtag_read()` 只查驱动 RX 环形缓冲——`usb_serial_jtag.c
+    get_read_bytes_available()` 无驱动**恒返回 0**，于是从不排空硬件 FIFO：
+    CLI 收不到任何字符（无回显无响应），且 USJ RX FIFO 塞满一包后主机所有写入
+    被 NAK（pyserial 表现为 write timeout）。**最终实现**：cli_task 以 20ms 轮询
+    直接读两口硬件 FIFO——USJ 用 `usb_serial_jtag_ll_read_rxfifo()`，UART0 用
+    `uart_ll_get_rxfifo_len()` + `uart_ll_read_rxfifo()`（S3 无 `uart_ll_get_dev`，
+    取设备用 `UART_LL_GET_HW(n)` 宏）；回显与日志仍走 VFS write（打开的
+    `/dev/secondary` fd 仅作回显出口）。各自独立行缓冲（两口可同时输入），
+    回显/退格/\r\n 归一。**主机侧注意**：USJ 在 DTR 未断言时丢弃输入、
+    关闭句柄时丢弃 TX——idf.py monitor 无感；自写脚本需 `dtr=True`（如 pyserial
+    打开后设 ser.dtr=True），强杀占用串口的进程可能让 OUT 端点卡死，
+    重新插拔或让芯片复位一次即可恢复
+  - 命令：`help`/`info`/`mode ap|sta`（存 NVS 后 `esp_restart`，重启生效）/
+    `ssid <名称>`+`pass <密码>`（存 NVS 后 `esp_wifi_disconnect` 热重连，无需重启）/
+    `ip [auto|x.x.x.x]`（STA 在线则断开重连重新绑定）/`reboot`
+  - `idf.py monitor` 直接敲命令回车即可（终端不回显，设备侧回显）
+- **验证**：全量重编 0 警告；2026-09-25 真机（COM8/USB-Serial-JTAG）pyserial 端到端
+  通过：`info\r\n` 正常回显并输出完整状态（模式/SSID/IP/MAC/CAN/运行时间）。
+  其余命令与 AP 模式按 README「串口配置命令」节清单回归
+
+## PC 上位机 + status JSON 命令 (2026-09-25 第七轮)
+
+- **动机**：把串口配置命令做成图形界面（此前评估的方案 A）。用户决定上位机**不放本仓库**，
+  存放在同级独立目录 `../CAN-WIFI-Host/`（canmon_gui.py 单文件 tkinter + requirements.txt
+  + README + `dist/CANMonHost.exe` PyInstaller 单文件打包，9.7MB，新电脑零依赖双击即用）
+- **固件侧（本仓库唯一改动）**：`serial_cli.c` 新增 `status` 命令——单行 JSON
+  （mode/link/ssid/rssi/channel/ap_clients/ip/netmask/gw/mac/ipmode/static_ip/mdns/
+  uptime_s/can_ring/can_total/twai/tec/rec），数据源 wifi_get_status + can_get_snapshot +
+  twai_get_status_info，SSID 做最小 JSON 转义；help 补一行，info 不变。
+  上位机优先解析 status，旧固件回`未知命令`时自动退回正则解析 info 文本（中文全角标点
+  verbatim 匹配）
+- **上位机要点**（坑与设计，改代码前必读）：
+  - 串口打开后 `dtr=True, rts=False`（USJ 不断言 DTR 丢弃输入）、`write_timeout=1.0`
+    （OUT 端点卡死时防挂死）、`timeout=0.1` 读轮询
+  - **S3 `esp_restart()` 对 USJ 只是 USB 总线复位，端口不掉、句柄有效**——重启后启动日志
+    从同一句柄无缝流出。因此重启流程 = 应答匹配后 3.5s 主动刷新状态；`begin_reconnect`
+    （0.8s 重试×15s）仅作真掉线兜底，`_post_reboot_refresh` 确认端口存活后取消兜底恢复轮询
+  - lost 事件带 gen（连接代数）防旧连接遗留事件串台；`_on_link_lost` 先 close 失效句柄
+    （否则重连线程的 is_open 守卫永远跳过重开）
+  - 应答判定按固件 verbatim 字符串（含全角标点）内容匹配，与到达顺序无关，可与 2s 静默
+    status 轮询并发；静默轮询的收发不进终端、不覆盖状态栏（只有手动刷新写「状态已更新」）
+  - 密码输入框与终端命令回显均为**明文**（用户要求；设备侧回显本就是明文）
+  - UI 全深色工业风（clam 主题 + 模块级 `PAL` 调色板 + `_setup_style()`）：状态卡片分
+    WIFI/网络/设备 三组，模式蓝/连接绿红/TWAI 绿黄红着色；截图自检（窗口定位 +
+    PowerShell CopyFromScreen + 放大裁剪）确认配色与布局
+- **验证**：固件全量重编 0 警告并烧录 COM8；链路级测试（status JSON ↔ info 文本解析一致、
+  help 含 status）；GUI 自动化冒烟（连接/状态面板 14 项/`ip auto` 应答判定/reboot 后
+  自动刷新）全部通过；exe 启动验证通过。**待用户手工回归**：mode 切换（含确认对话框）、
+  ssid/pass 修改真机重连、AP/STA 两模式下面板
+- **VOFA+ 占口注意**：本机 VOFA+ 等串口工具占 COM8 时，烧录与上位机连接都会
+  PermissionError(13)——先关掉它
+
 ## 关键代码位置
 | 文件 | 说明 |
 |------|------|
 | `main/can.c` | TWAI 驱动初始化、RX 任务（DLC 钳位 + 记录写入）、告警处理、发送 API（ID 范围校验） |
 | `main/can_logger.c/.h` | PSRAM 录制缓冲：过滤 0x18FF0182/0x18FF0282、录满即停、buffer/status API |
 | `main/signal_decode.c/.h` | 电机/母线报文信号解码（字节序宏）、sig_is_record_id 录制过滤——仅 /api/export CSV 列在用 |
-| `main/wifi.c` | WiFi STA 连接/断线重连（指数退避）、连接状态、mDNS |
-| `main/led.c` | WS2812 状态灯（无客户端=红，有客户端=炫彩） |
-| `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export |
+| `main/wifi.c` | WiFi AP/STA 双模式：NVS 配置加载/保存、GOT_IP 自动绑定 .250/固定 IP、断线重连（指数退避）、mDNS、`wifi_get_status` |
+| `main/serial_cli.c/.h` | 串口配置台：20ms 轮询双口硬件 FIFO 输入（USJ ll + UART0 ll，绕开 VFS 读），回显/行解析、help/info/status(JSON)/mode/ssid/pass/ip/reboot |
+| `main/led.c` | WS2812 状态灯（未连接=红，已连接/热点运行=炫彩；逻辑依赖 `wifi_is_connected()`） |
+| `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export /api/signals |
 | `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_JS） |
 | `main/time_sync.c/.h` | 浏览器授时换算（CSV time 列真实时间 / 曲线标题时间） |
 | `main/web_head.h` / `web_body.h` / `web_js.h` | 页面三段源：头/样式+水印、DOM、脚本 |
-| `main/main.c` | 入口：NVS → WiFi → CAN → **can_log_init →** HTTP Server → LED |
+| `main/main.c` | 入口：NVS → WiFi(AP/STA) → CAN → **can_log_init →** HTTP Server → LED → 串口配置台 |
 | `CMakeLists.txt`（顶层） | `set(COMPONENTS main esp_psram)` — esp_psram 必须显式列出 |
 | `sdkconfig.defaults` | PSRAM(OCT/80M) + Flash(DIO/80M/16MB) 的 kconfig 默认值 |

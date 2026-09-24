@@ -29,10 +29,15 @@
   - 浏览器直接访问 `http://<设备IP>/api/export` 下载物理值 CSV：
     `no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
   - 日常使用建议用**自定义曲线页的前端记录器**（记录已配置信号的解码值，导出宽表 CSV）
-- **WiFi STA**：连接手机热点 `ABCDEF`（密码 `A12345678`），
-  **固定 IP `192.168.43.250`**（网关 192.168.43.1，`wifi.h` 静态配置，网页地址不变）；
-  `can-monitor.local` 也可访问；断线自动重连（前 5 次立即重试，之后 1s→30s 指数退避）
-- **状态灯**（WS2812，GPIO48）：**未连上路由器 → 红灯常亮；连上（拿到 IP）→ 炫彩**（色相循环）
+- **WiFi 双模式（串口可配，NVS 持久化）**：
+  - **STA 模式**（默认）：连接现有路由器/热点，SSID、密码经串口命令设置（默认 `ABCDEF`/`A12345678`）
+  - **AP 模式**：设备自建热点 `CAN-Monitor-XXXX`（XXXX=MAC 后 4 位，密码 `12345678`），
+    设备 IP 固定 `192.168.4.1`，手机连热点直接访问网页
+  - **IP 自动绑定 .250**（默认规则）：DHCP 拿到 IP 后自动改绑为**同网段**的 `xxx.xxx.xxx.250`
+    （网关/掩码/DNS 沿用 DHCP 下发值），热点网段变了也无需改代码；也可用串口固定任意 IP
+  - `can-monitor.local` 也可访问；断线自动重连（前 5 次立即重试，之后 1s→30s 指数退避）
+- **串口配置台**：UART0 与 USB-Serial/JTAG 两个串口均可输入命令（详见「串口配置命令」）
+- **状态灯**（WS2812，GPIO48）：**未连上路由器（热点未运行）→ 红灯常亮；连上（拿到 IP）/热点运行 → 炫彩**
 
 ## 硬件
 
@@ -70,10 +75,11 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 
 ## 使用
 
-1. 手机/电脑连接热点 **`ABCDEF`**（密码 `A12345678`），设备上电后自动加入同一热点
+1. 设备上电后按 NVS 保存的配置连网（首次烧录默认 STA 连热点 `ABCDEF`/`A12345678`，自动绑定 192.168.43.250）
    - **注意**：`CONFIG_SPIRAM_MEMTEST=y` 会让上电慢几秒（PSRAM 内存测试），正常
-   - 设备固定 IP `192.168.43.250`（无需查日志；热点管理页也会列出已连设备）
-2. 浏览器打开 `http://192.168.43.250` 或 `http://can-monitor.local`
+   - 默认配置下设备 IP `192.168.43.250`（无需查日志；热点管理页也会列出已连设备）
+   - 换热点/改配置不用重烧固件，用**串口命令**（见下节）
+2. 浏览器打开 `http://<设备IP>`（默认 `http://192.168.43.250`）或 `http://can-monitor.local`
 3. 在底部发送区填写 ID / DLC / Data 即可向总线发送 CAN 帧（该发送面板只在 CAN Monitor 页显示）
 4. **看报表**：点主表格里任意一行 → 该 ID 的原始报文历史表，左上 Back to List 返回
 5. **自定义曲线**：详情页「+ 添加曲线」定义信号
@@ -85,6 +91,39 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
    「导出配置」把信号定义备份为 JSON
 7. **原始帧备份**（可选）：浏览器直接访问 `http://<设备IP>/api/export`
    下载设备 PSRAM 录制的物理值 CSV（需先用 curl `POST /api/rec/start|stop` 触发）
+
+### 串口配置命令
+
+`idf.py monitor`（或任意串口终端，115200）连上后**直接敲命令回车**即可，UART0（USB转UART口）
+与板载 USB-Serial/JTAG 口都支持输入；`info` 可随时查看设备当前状态。
+
+```
+help                命令列表
+info                当前状态：模式/SSID/信号/IP/掩码/网关/MAC/CAN状态/运行时间
+status              同上信息，单行 JSON 输出（供 PC 上位机解析）
+mode ap | mode sta  切换热点/STA 模式（保存到 NVS，设备自动重启生效）
+ssid <名称>         设置 STA 连接的 WiFi 名称（保存并立即重连，无需重启）
+pass <密码>         设置 STA 密码（8~63 字符，保存并立即重连）
+ip                  查看当前 IP 配置
+ip auto             自动绑定当前网段的 xxx.xxx.xxx.250（默认）
+ip <x.x.x.x>        设置固定 IP（如 ip 192.168.1.250）
+reboot              重启设备
+```
+
+所有配置保存于 NVS（命名空间 `wificfg`），断电不丢、重烧固件不丢（擦除 NVS 后回到默认值）。
+
+不想敲命令？用 **PC 上位机**（同级目录 `../CAN-WIFI-Host/`）：图形界面切换模式、
+改 SSID/密码/IP、实时状态面板 + 串口终端。`dist/CANMonHost.exe` 双击即用（新电脑
+零依赖），或 `pip install pyserial` 后运行 `canmon_gui.py`，详见其 README。
+
+**手工验证清单**（改 WiFi 相关代码后过一遍）：
+
+1. 上电 `info`：模式/SSID/IP 显示正确，STA 显示信号强度与信道
+2. `mode ap` → 自动重启 → 手机能看到热点 `CAN-Monitor-XXXX`，连上后 `http://192.168.4.1` 打开网页，LED 炫彩
+3. AP 下 `mode sta` → 重启后回 STA 并按保存的 SSID 重连
+4. `ssid 新热点名` + `pass 密码` → 不重启即重连，新热点网段下 IP 为 `xxx.xxx.xxx.250`
+5. `ip auto` 换不同网段的热点验证仍得 `.250`；`ip 192.168.1.250` 固定 IP 生效
+6. 断电重启：以上配置均保留
 
 ### 信号定义（来自协议表）
 
@@ -131,13 +170,14 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 
 ```
 main/
-├── main.c             # 初始化：NVS → WiFi → CAN → 记录器 → Web → LED
+├── main.c             # 初始化：NVS → WiFi(AP/STA) → CAN → 记录器 → Web → LED → 串口配置台
 ├── can.c / can.h      # TWAI 驱动、RX 任务、每 ID 频率统计
 ├── can_logger.c/.h    # PSRAM 录制缓冲（双 ID 过滤，录满即停）
 ├── signal_decode.c/.h # 0x18FF0182/0x18FF0282 信号解码（/api/export CSV 物理值列用）
-├── wifi.c / wifi.h    # WiFi STA（连接路由器）+ mDNS + 断线重连
+├── wifi.c / wifi.h    # WiFi AP/STA 双模式 + NVS 配置 + IP 自动绑定 .250 + mDNS + 断线重连
+├── serial_cli.c/.h    # 串口配置台（mode/ssid/pass/ip/info 命令，UART0 与 USB 串口均可输入）
 ├── time_sync.c/.h     # 浏览器授时换算（真实时间戳）
-├── led.c / led.h      # WS2812 状态灯（红=无客户端，炫彩=有客户端）
+├── led.c / led.h      # WS2812 状态灯（红=未连接，炫彩=已连接/热点运行）
 ├── web_server.c       # HTTP 服务与 JSON API / CSV 导出
 ├── web_page.h         # 页面组装宏（拼接 web_head/web_body/web_js 三段源文件）
 └── web_head.h web_body.h web_js.h   # 前端页面源（HTML 头+样式 / DOM / JS）
