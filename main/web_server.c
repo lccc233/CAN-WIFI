@@ -1,6 +1,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <errno.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -18,6 +20,59 @@
 
 static const char *TAG = "web";
 static httpd_handle_t s_server = NULL;
+static cJSON *rec_json(const can_log_status_t *rec);
+
+static esp_err_t json_reply(httpd_req_t *req, const char *status, cJSON *root)
+{
+    char *body = root ? cJSON_PrintUnformatted(root) : NULL;
+    cJSON_Delete(root);
+    if (!body) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t ret = httpd_resp_sendstr(req, body);
+    free(body);
+    return ret;
+}
+
+static esp_err_t json_error(httpd_req_t *req, const char *status, const char *message)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (root) {
+        cJSON_AddBoolToObject(root, "ok", false);
+        cJSON_AddStringToObject(root, "error", message);
+    }
+    return json_reply(req, status, root);
+}
+
+// Read exactly Content-Length; reject truncation/oversize before parsing or persisting.
+static cJSON *read_json_body(httpd_req_t *req, size_t limit)
+{
+    if (!req->content_len || req->content_len > limit) {
+        json_error(req, "400 Bad Request", "Empty or oversized JSON body");
+        return NULL;
+    }
+    char *body = malloc(req->content_len + 1);
+    if (!body) {
+        json_error(req, "500 Internal Server Error", "Out of memory");
+        return NULL;
+    }
+    size_t got = 0;
+    while (got < req->content_len) {
+        int n = httpd_req_recv(req, body + got, req->content_len - got);
+        if (n <= 0) {
+            free(body);
+            json_error(req, "400 Bad Request", "Incomplete JSON body");
+            return NULL;
+        }
+        got += n;
+    }
+    body[got] = 0;
+    cJSON *root = cJSON_ParseWithLengthOpts(body, got + 1, NULL, true);
+    free(body);
+    if (!root) json_error(req, "400 Bad Request", "Invalid JSON");
+    return root;
+}
 
 // ---- 集中常量（D3） ----
 #define HTTP_TASK_STACK_SIZE    12288   // /api/messages 局部 snapshot+freq 快照较大
@@ -72,8 +127,9 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     }
 
     can_msg_entry_t snapshot[CAN_RX_RING_SIZE];
+    uint32_t seq[CAN_RX_RING_SIZE];
     uint32_t count, total;
-    can_get_snapshot(snapshot, CAN_RX_RING_SIZE, &count, &total);
+    can_get_snapshot_seq(snapshot, seq, CAN_RX_RING_SIZE, &count, &total);
 
     can_id_freq_t freqs[CAN_FREQ_MAX_IDS];
     int freq_count = can_get_id_freqs(freqs, CAN_FREQ_MAX_IDS);
@@ -87,8 +143,8 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     bool synced = time_sync_get(now_boot, &now_epoch);
     char clk_hdr[128];
     snprintf(clk_hdr, sizeof(clk_hdr),
-             "{\"clk\":{\"sync\":%s,\"boot\":%llu,\"ep\":%lld},",
-             synced ? "true" : "false",
+             "{\"boot\":\"%08lx\",\"clk\":{\"sync\":%s,\"boot\":%llu,\"ep\":%lld},",
+             (unsigned long)can_get_boot_id(), synced ? "true" : "false",
              (unsigned long long)now_boot,
              (unsigned long long)now_epoch);
     httpd_resp_sendstr_chunk(req, clk_hdr);
@@ -96,17 +152,17 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     // 录制状态（并入 messages 响应，前端 200ms 轮询自动携带）
     can_log_status_t rec;
     can_log_get_status(&rec);
-    char rec_hdr[128];
-    snprintf(rec_hdr, sizeof(rec_hdr),
-             "\"rec\":{\"on\":%s,\"cnt\":%lu,\"cap\":%lu,\"drop\":%lu,\"ms\":%lu,\"psram\":%s},\"total\":%lu,\"freqs\":[",
-             rec.recording ? "true" : "false",
-             (unsigned long)rec.count,
-             (unsigned long)rec.capacity,
-             (unsigned long)rec.dropped,
-             (unsigned long)rec.duration_ms,
-             rec.psram_ok ? "true" : "false",
-             (unsigned long)total);
-    httpd_resp_sendstr_chunk(req, rec_hdr);
+    cJSON *rec_status = rec_json(&rec);
+    char *rec_body = rec_status ? cJSON_PrintUnformatted(rec_status) : NULL;
+    cJSON_Delete(rec_status);
+    if (!rec_body) { msgs_busy_release(); return ESP_FAIL; }
+    esp_err_t rec_ret = httpd_resp_sendstr_chunk(req, "\"rec\":");
+    if (rec_ret == ESP_OK) rec_ret = httpd_resp_sendstr_chunk(req, rec_body);
+    free(rec_body);
+    char total_hdr[64];
+    snprintf(total_hdr, sizeof(total_hdr), ",\"total\":%lu,\"freqs\":[", (unsigned long)total);
+    if (rec_ret == ESP_OK) rec_ret = httpd_resp_sendstr_chunk(req, total_hdr);
+    if (rec_ret != ESP_OK) { msgs_busy_release(); return ESP_FAIL; }
 
     for (int i = 0; i < freq_count; i++) {
         char entry[80];
@@ -125,8 +181,9 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
         char entry[160];
         bool ok = true;
         int n = snprintf(entry, sizeof(entry),
-            "%s{\"t\":%lu,\"id\":\"0x%lX\",\"dlc\":%d,\"ext\":%s,\"data\":\"",
+            "%s{\"seq\":%lu,\"t\":%lu,\"id\":\"0x%lX\",\"dlc\":%d,\"ext\":%s,\"data\":\"",
             (emitted > 0) ? "," : "",
+            (unsigned long)seq[i],
             (unsigned long)snapshot[i].timestamp_ms,
             (unsigned long)snapshot[i].id,
             snapshot[i].dlc,
@@ -157,136 +214,151 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET/POST /api/signals — 自定义曲线信号配置（设备 NVS 持久化，断电不丢）
-// 配置真源在设备：浏览器 localStorage 仅作缓存（页面加载时以设备为准；
-// 设备为空时把浏览器现有配置迁移上去）。多浏览器并存时，最后保存者生效。
-// 存储格式：紧凑 JSON 数组原文（cJSON 校验后重新序列化），上限 ~3500 字节
-#define SIGNALS_NVS_NS     "webui"
-#define SIGNALS_NVS_KEY    "signals"
-#define SIGNALS_MAX_BYTES  3500
-#define SIGNALS_MAX_ITEMS  64
+// Signal settings stay independent of the immutable configuration of each recording.
+#define SIGNALS_NVS_NS "webui"
+#define SIGNALS_NVS_KEY "signals"
+#define SIGNALS_MAX_BYTES CAN_LOG_CONFIG_MAX_BYTES
+#define SIGNALS_MAX_ITEMS CAN_LOG_MAX_IDS
 
-// POST body 的单条配置校验：对象；id 为 0x 开头十六进制字符串（3~16 字符）；
-// name 为字符串（≤64 字符）。其余字段不限定（总大小另有 SIGNALS_MAX_BYTES 上限）。
-// 该接口局域网内无鉴权可写，畸形数据挡在 NVS 门外（前端渲染另有转义兜底）
-static bool signals_entry_valid(const cJSON *item)
+static bool json_integer(const cJSON *v, int low, int high)
+{
+    return cJSON_IsNumber(v) && isfinite(v->valuedouble) &&
+           v->valuedouble >= low && v->valuedouble <= high &&
+           floor(v->valuedouble) == v->valuedouble;
+}
+
+static bool signals_entry_valid(cJSON *item)
 {
     if (!cJSON_IsObject(item)) return false;
-    const cJSON *jid = cJSON_GetObjectItem(item, "id");
-    const cJSON *jname = cJSON_GetObjectItem(item, "name");
-    if (!cJSON_IsString(jname) || strlen(jname->valuestring) > 64) return false;
-    if (!cJSON_IsString(jid)) return false;
-    const char *p = jid->valuestring;
-    size_t len = strlen(p);
-    if (len < 3 || len > 16 || p[0] != '0' || (p[1] != 'x' && p[1] != 'X')) return false;
-    for (p += 2; *p; p++) {
-        if (!isxdigit((unsigned char)*p)) return false;
+    cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(item, "name");
+    cJSON *unit = cJSON_GetObjectItemCaseSensitive(item, "unit");
+    cJSON *start = cJSON_GetObjectItemCaseSensitive(item, "start");
+    cJSON *len = cJSON_GetObjectItemCaseSensitive(item, "len");
+    cJSON *endian = cJSON_GetObjectItemCaseSensitive(item, "endian");
+    cJSON *factor = cJSON_GetObjectItemCaseSensitive(item, "factor");
+    cJSON *offset = cJSON_GetObjectItemCaseSensitive(item, "offset");
+    cJSON *color = cJSON_GetObjectItemCaseSensitive(item, "color");
+    if (!cJSON_IsString(id) || strlen(id->valuestring) < 3 || strlen(id->valuestring) > 10 ||
+        id->valuestring[0] != '0' || (id->valuestring[1] != 'x' && id->valuestring[1] != 'X')) return false;
+    for (const char *v = id->valuestring + 2; *v; v++) if (!isxdigit((unsigned char)*v)) return false;
+    unsigned long numeric_id = strtoul(id->valuestring + 2, NULL, 16);
+    if (numeric_id > 0x1FFFFFFFUL) return false;
+    char canonical_id[11];
+    snprintf(canonical_id, sizeof(canonical_id), "0x%lx", numeric_id);
+    if (!cJSON_SetValuestring(id, canonical_id)) return false;
+    if (!cJSON_IsString(name) || !*name->valuestring || strlen(name->valuestring) > 64 ||
+        !cJSON_IsString(unit) || strlen(unit->valuestring) > 32 ||
+        !json_integer(start, 0, 63) || !json_integer(len, 1, 64) || !cJSON_IsString(endian) ||
+        !cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(item, "signed")) ||
+        !cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(item, "enabled")) ||
+        !cJSON_IsNumber(factor) || !isfinite(factor->valuedouble) ||
+        !cJSON_IsNumber(offset) || !isfinite(offset->valuedouble)) return false;
+    bool has_name = false;
+    for (const char *p = name->valuestring; *p; p++) {
+        if (!isspace((unsigned char)*p)) { has_name = true; break; }
+    }
+    if (!has_name) return false;
+    bool intel = strcmp(endian->valuestring, "intel") == 0;
+    if (!intel && strcmp(endian->valuestring, "moto") != 0) return false;
+    int first_bit = intel ? start->valueint : (start->valueint / 8) * 8 + 7 - (start->valueint % 8);
+    if (first_bit + len->valueint > 64) return false;
+    if (!cJSON_IsString(color) || color->valuestring[0] != '#') return false;
+    size_t color_len = strlen(color->valuestring);
+    if (color_len != 4 && color_len != 7 && color_len != 9) return false;
+    for (const char *v = color->valuestring + 1; *v; v++) if (!isxdigit((unsigned char)*v)) return false;
+    return true;
+}
+
+static bool signals_valid(cJSON *array)
+{
+    if (!cJSON_IsArray(array) || cJSON_GetArraySize(array) > SIGNALS_MAX_ITEMS) return false;
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, array) {
+        if (!signals_entry_valid(item)) return false;
+        for (cJSON *other = array->child; other != item; other = other->next) {
+            if (!strcmp(cJSON_GetObjectItemCaseSensitive(other, "id")->valuestring,
+                        cJSON_GetObjectItemCaseSensitive(item, "id")->valuestring) &&
+                !strcmp(cJSON_GetObjectItemCaseSensitive(other, "name")->valuestring,
+                        cJSON_GetObjectItemCaseSensitive(item, "name")->valuestring)) return false;
+        }
     }
     return true;
 }
 
 static esp_err_t api_signals_handler(httpd_req_t *req)
 {
-    nvs_handle_t nvs;
-    if (nvs_open(SIGNALS_NVS_NS, NVS_READWRITE, &nvs) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS open failed");
-        return ESP_FAIL;
-    }
-    httpd_resp_set_type(req, "application/json");
-
+    bool metadata = false;
+    char query[32], value[8];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "meta", value, sizeof(value)) == ESP_OK) metadata = !strcmp(value, "1");
     if (req->method == HTTP_POST) {
-        // 读完整 body（recv 可能分片）
-        size_t cap = SIGNALS_MAX_BYTES + 1;
-        char *body = malloc(cap);
-        if (!body) {
-            nvs_close(nvs);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No mem");
-            return ESP_FAIL;
+        cJSON *array = read_json_body(req, SIGNALS_MAX_BYTES);
+        if (!array) return ESP_OK;
+        if (!signals_valid(array)) {
+            cJSON_Delete(array);
+            return json_error(req, "400 Bad Request", "Invalid signal definition or duplicate id/name");
         }
-        int total = 0, recvd;
-        while (total < (int)(cap - 1) &&
-               (recvd = httpd_req_recv(req, body + total, cap - 1 - total)) > 0) {
-            total += recvd;
+        int count = cJSON_GetArraySize(array);
+        char *compact = cJSON_PrintUnformatted(array);
+        cJSON_Delete(array);
+        if (!compact) return json_error(req, "500 Internal Server Error", "Out of memory");
+        if (strlen(compact) > SIGNALS_MAX_BYTES) {
+            free(compact);
+            return json_error(req, "400 Bad Request", "Signal configuration exceeds 3500 bytes");
         }
-        if (total <= 0) {
-            free(body);
-            nvs_close(nvs);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
-            return ESP_FAIL;
-        }
-        body[total] = '\0';
-
-        // 校验为 JSON 数组并转紧凑格式
-        cJSON *root = cJSON_Parse(body);
-        free(body);
-        if (!root || !cJSON_IsArray(root)) {
-            if (root) cJSON_Delete(root);
-            nvs_close(nvs);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad JSON");
-            return ESP_FAIL;
-        }
-        int n = cJSON_GetArraySize(root);
-        bool valid = (n <= SIGNALS_MAX_ITEMS);
-        for (int i = 0; valid && i < n; i++) {
-            valid = signals_entry_valid(cJSON_GetArrayItem(root, i));
-        }
-        if (!valid) {
-            cJSON_Delete(root);
-            nvs_close(nvs);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                                "Bad signal entry (need id 0x.. and name)");
-            return ESP_FAIL;
-        }
-        char *compact = cJSON_PrintUnformatted(root);
-        cJSON_Delete(root);
-        esp_err_t err = ESP_OK;
-        if (!compact || strlen(compact) > SIGNALS_MAX_BYTES) {
-            err = ESP_ERR_INVALID_SIZE;   // 统一走下方报错
-        } else {
+        nvs_handle_t nvs;
+        esp_err_t err = nvs_open(SIGNALS_NVS_NS, NVS_READWRITE, &nvs);
+        if (err == ESP_OK) {
             err = nvs_set_blob(nvs, SIGNALS_NVS_KEY, compact, strlen(compact));
             if (err == ESP_OK) err = nvs_commit(nvs);
+            nvs_close(nvs);
         }
-        if (compact) free(compact);
-        nvs_close(nvs);
-        if (err != ESP_OK) {
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                                err == ESP_ERR_INVALID_SIZE
-                                    ? "{\"ok\":false,\"error\":\"config too large\"}"
-                                    : "{\"ok\":false,\"error\":\"NVS write failed\"}");
-            return ESP_FAIL;
-        }
-        char out[40];
-        snprintf(out, sizeof(out), "{\"ok\":true,\"n\":%d}", n);
-        httpd_resp_sendstr(req, out);
-        return ESP_OK;
+        free(compact);
+        if (err != ESP_OK) return json_error(req, "500 Internal Server Error", "NVS write failed; local draft retained");
+        cJSON *root = cJSON_CreateObject();
+        if (root) { cJSON_AddBoolToObject(root, "ok", true); cJSON_AddNumberToObject(root, "n", count); }
+        return json_reply(req, "200 OK", root);
     }
 
-    // GET：返回存储的配置数组（未存过或异常时返回空数组）
-    size_t len = 0;
-    if (nvs_get_blob(nvs, SIGNALS_NVS_KEY, NULL, &len) != ESP_OK ||
-        len == 0 || len > SIGNALS_MAX_BYTES) {
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(SIGNALS_NVS_NS, NVS_READONLY, &nvs);
+    bool configured = false;
+    cJSON *array = NULL;
+    if (err == ESP_OK) {
+        size_t size = 0;
+        err = nvs_get_blob(nvs, SIGNALS_NVS_KEY, NULL, &size);
+        if (err == ESP_OK && size > 0 && size <= SIGNALS_MAX_BYTES) {
+            char *stored = malloc(size + 1);
+            if (!stored) { nvs_close(nvs); return json_error(req, "500 Internal Server Error", "Out of memory"); }
+            err = nvs_get_blob(nvs, SIGNALS_NVS_KEY, stored, &size);
+            if (err == ESP_OK) {
+                stored[size] = 0;
+                array = cJSON_ParseWithLengthOpts(stored, size + 1, NULL, true);
+                configured = true;
+            }
+            free(stored);
+        } else if (err == ESP_OK) {
+            err = ESP_ERR_INVALID_SIZE;
+        }
         nvs_close(nvs);
-        httpd_resp_sendstr(req, "[]");
-        return ESP_OK;
     }
-    char *buf = malloc(len + 1);
-    if (!buf) {
-        nvs_close(nvs);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No mem");
-        return ESP_FAIL;
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        cJSON_Delete(array);
+        return json_error(req, "500 Internal Server Error", "Stored configuration unavailable");
     }
-    esp_err_t err = nvs_get_blob(nvs, SIGNALS_NVS_KEY, buf, &len);
-    nvs_close(nvs);
-    if (err != ESP_OK) {
-        free(buf);
-        httpd_resp_sendstr(req, "[]");
-        return ESP_OK;
+    if (configured && (!array || !signals_valid(array))) {
+        cJSON_Delete(array);
+        return json_error(req, "500 Internal Server Error", "Stored configuration is invalid; no cache migration performed");
     }
-    buf[len] = '\0';
-    httpd_resp_sendstr(req, buf);
-    free(buf);
-    return ESP_OK;
+    if (!array) array = cJSON_CreateArray();
+    if (!metadata) return json_reply(req, "200 OK", array);
+    cJSON *root = cJSON_CreateObject();
+    if (!root || !array) { cJSON_Delete(root); cJSON_Delete(array); return json_error(req, "500 Internal Server Error", "Out of memory"); }
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "configured", configured);
+    cJSON_AddItemToObject(root, "signals", array);
+    return json_reply(req, "200 OK", root);
 }
 
 // POST /api/send — 发送 CAN 帧
@@ -418,66 +490,245 @@ static esp_err_t api_time_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// POST /api/rec/start — 开始录制
+static cJSON *rec_json(const can_log_status_t *rec)
+{
+    cJSON *out = cJSON_CreateObject();
+    if (!out) return NULL;
+    cJSON_AddStringToObject(out, "session", rec->session);
+    cJSON_AddBoolToObject(out, "on", rec->recording);
+    cJSON_AddNumberToObject(out, "cnt", rec->count);
+    cJSON_AddNumberToObject(out, "cap", rec->capacity);
+    cJSON_AddNumberToObject(out, "drop", rec->dropped);
+    cJSON_AddNumberToObject(out, "ms", rec->duration_ms);
+    cJSON_AddBoolToObject(out, "psram", rec->psram_ok);
+    cJSON_AddBoolToObject(out, "full", rec->full);
+    cJSON_AddBoolToObject(out, "protected", rec->protected_record);
+    cJSON_AddNumberToObject(out, "rx_lost", rec->rx_lost);
+    cJSON_AddBoolToObject(out, "quality_known", rec->rx_quality_known);
+    return out;
+}
+
+static esp_err_t record_reply(httpd_req_t *req, const can_log_status_t *rec)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *status = rec_json(rec);
+    char *config = malloc(CAN_LOG_CONFIG_MAX_BYTES + 1);
+    if (!root || !status || !config) {
+        cJSON_Delete(root); cJSON_Delete(status); free(config);
+        return json_error(req, "500 Internal Server Error", "Out of memory");
+    }
+    esp_err_t err = *rec->session ? can_log_copy_config(rec->session, config, CAN_LOG_CONFIG_MAX_BYTES + 1) : ESP_OK;
+    if (!*rec->session) strcpy(config, "[]");
+    cJSON *signals = err == ESP_OK ? cJSON_Parse(config) : NULL;
+    free(config);
+    if (!signals) {
+        cJSON_Delete(root); cJSON_Delete(status);
+        return json_error(req, "409 Conflict", "Recording changed; reload status");
+    }
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddItemToObject(root, "rec", status);
+    cJSON_AddItemToObject(root, "signals", signals);
+    return json_reply(req, "200 OK", root);
+}
+
+static bool get_hex_token(cJSON *root, const char *key, const char **value)
+{
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!cJSON_IsString(item) || strlen(item->valuestring) != 16) return false;
+    for (const char *p = item->valuestring; *p; p++) if (!isxdigit((unsigned char)*p)) return false;
+    *value = item->valuestring;
+    return true;
+}
+
+static bool get_session(cJSON *root, const char **session)
+{
+    return get_hex_token(root, "session", session);
+}
+
+static esp_err_t api_rec_status_handler(httpd_req_t *req)
+{
+    can_log_status_t rec;
+    can_log_get_status(&rec);
+    return record_reply(req, &rec);
+}
+
+// New records freeze signal definitions and select only IDs required by enabled signals.
 static esp_err_t api_rec_start_handler(httpd_req_t *req)
 {
-    esp_err_t ret = can_log_start();
-    httpd_resp_set_type(req, "application/json");
-    if (ret != ESP_OK) {
-        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"psram unavailable\"}");
-    } else {
-        httpd_resp_sendstr(req, "{\"ok\":true}");
+    can_log_status_t rec;
+    if (!req->content_len) {
+        esp_err_t err = can_log_start();
+        if (err != ESP_OK) return json_error(req, "409 Conflict", "Recorder unavailable or previous record protected");
+        can_log_get_status(&rec);
+        return record_reply(req, &rec);
     }
-    return ESP_OK;
+    cJSON *root = read_json_body(req, CAN_LOG_CONFIG_MAX_BYTES + 128);
+    if (!root) return ESP_OK;
+    cJSON *signals = cJSON_GetObjectItemCaseSensitive(root, "signals");
+    if (!signals_valid(signals)) {
+        cJSON_Delete(root);
+        return json_error(req, "400 Bad Request", "Invalid recording signal definitions");
+    }
+    uint32_t ids[CAN_LOG_MAX_IDS];
+    size_t id_count = 0;
+    cJSON *signal = NULL;
+    cJSON_ArrayForEach(signal, signals) {
+        if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(signal, "enabled"))) continue;
+        uint32_t id = strtoul(cJSON_GetObjectItemCaseSensitive(signal, "id")->valuestring + 2, NULL, 16);
+        bool found = false;
+        for (size_t i = 0; i < id_count; i++) if (ids[i] == id) found = true;
+        if (!found) ids[id_count++] = id;
+    }
+    char *config = cJSON_PrintUnformatted(signals);
+    cJSON_Delete(root);
+    if (!config) return json_error(req, "500 Internal Server Error", "Out of memory");
+    if (!id_count || strlen(config) > CAN_LOG_CONFIG_MAX_BYTES) {
+        free(config);
+        return json_error(req, "400 Bad Request", "Need enabled signals within configuration size limit");
+    }
+    esp_err_t err = can_log_start_config(config, ids, id_count, &rec);
+    free(config);
+    if (err != ESP_OK) return json_error(req, "409 Conflict", "Recorder unavailable, active, or previous record protected");
+    return record_reply(req, &rec);
 }
 
-// POST /api/rec/stop — 停止录制
 static esp_err_t api_rec_stop_handler(httpd_req_t *req)
 {
-    can_log_stop();
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, "{\"ok\":true}");
-    return ESP_OK;
+    can_log_status_t rec;
+    if (!req->content_len) {
+        can_log_get_status(&rec);
+        if (rec.protected_record) return json_error(req, "409 Conflict", "Session required for protected recording");
+        if (can_log_stop() != ESP_OK) return json_error(req, "409 Conflict", "Recorder unavailable");
+        can_log_get_status(&rec);
+    } else {
+        cJSON *root = read_json_body(req, 128);
+        if (!root) return ESP_OK;
+        const char *session = NULL;
+        esp_err_t err = get_session(root, &session) ? can_log_stop_session(session, &rec) : ESP_ERR_INVALID_ARG;
+        cJSON_Delete(root);
+        if (err != ESP_OK) return json_error(req, "409 Conflict", "Recording identity mismatch");
+    }
+    return record_reply(req, &rec);
 }
 
-// POST /api/rec/clear — 清空录制数据（A2：录制进行中拒绝，防导出数据被覆盖）
+static esp_err_t api_rec_release_handler(httpd_req_t *req)
+{
+    cJSON *root = read_json_body(req, 256);
+    if (!root) return ESP_OK;
+    const char *session = NULL;
+    const char *client = NULL;
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (get_session(root, &session)) {
+        err = get_hex_token(root, "client", &client) ? can_log_unprotect_client(session, client) : can_log_unprotect(session);
+    }
+    cJSON_Delete(root);
+    if (err != ESP_OK) return json_error(req, "409 Conflict", "另一页面正在同步或导出；请完成同步后再开始新记录");
+    can_log_status_t rec;
+    can_log_get_status(&rec);
+    return record_reply(req, &rec);
+}
+
+static esp_err_t api_rec_ack_handler(httpd_req_t *req)
+{
+    cJSON *root = read_json_body(req, 256);
+    if (!root) return ESP_OK;
+    const char *session = NULL, *client = NULL;
+    cJSON *count = cJSON_GetObjectItemCaseSensitive(root, "count");
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    cJSON *receipt = NULL;
+    if (get_session(root, &session) && get_hex_token(root, "client", &client) && json_integer(count, 0, INT32_MAX)) {
+        err = can_log_sync_done(session, client, count->valueint);
+        if (err == ESP_OK) {
+            receipt = cJSON_CreateObject();
+            if (receipt) {
+                cJSON_AddBoolToObject(receipt, "ok", true);
+                cJSON_AddStringToObject(receipt, "session", session);
+                cJSON_AddNumberToObject(receipt, "count", count->valueint);
+            }
+        }
+    }
+    cJSON_Delete(root);
+    if (err != ESP_OK) return json_error(req, "409 Conflict", "Record identity or final count changed; sync not acknowledged");
+    return json_reply(req, "200 OK", receipt);
+}
+
 static esp_err_t api_rec_clear_handler(httpd_req_t *req)
 {
-    if (can_log_is_recording()) {
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"stop recording first\"}");
-        return ESP_OK;
+    if (can_log_clear() != ESP_OK) return json_error(req, "409 Conflict", "Record active or protected; explicit release required");
+    can_log_status_t rec;
+    can_log_get_status(&rec);
+    return record_reply(req, &rec);
+}
+
+static esp_err_t api_rec_data_handler(httpd_req_t *req)
+{
+    char query[96], session[17], client[17], offset_str[16];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "session", session, sizeof(session)) != ESP_OK || strlen(session) != 16 ||
+        httpd_query_key_value(query, "client", client, sizeof(client)) != ESP_OK || strlen(client) != 16 ||
+        httpd_query_key_value(query, "from", offset_str, sizeof(offset_str)) != ESP_OK || !*offset_str) {
+        return json_error(req, "400 Bad Request", "Need session, client and from index");
     }
-    can_log_clear();
+    for (const char *p = offset_str; *p; p++) if (!isdigit((unsigned char)*p)) return json_error(req, "400 Bad Request", "Invalid from index");
+    errno = 0;
+    unsigned long offset = strtoul(offset_str, NULL, 10);
+    if (errno || offset > UINT32_MAX) return json_error(req, "400 Bad Request", "Invalid from index");
+    can_msg_entry_t frames[CAN_LOG_READ_MAX_ENTRIES];
+    uint32_t count = 0;
+    can_log_status_t rec;
+    esp_err_t ret = can_log_read_client(session, client, offset, frames, CAN_LOG_READ_MAX_ENTRIES, &count, &rec);
+    if (ret != ESP_OK) return json_error(req, "409 Conflict", "Recording changed or from index unavailable");
+    cJSON *status = rec_json(&rec);
+    char *status_json = status ? cJSON_PrintUnformatted(status) : NULL;
+    cJSON_Delete(status);
+    if (!status_json) return json_error(req, "500 Internal Server Error", "Out of memory");
+    char out[4096];
+    int n = snprintf(out, sizeof(out), "{\"ok\":true,\"rec\":%s,\"from\":%lu,\"next\":%lu,\"frames\":[",
+                     status_json, offset, offset + count);
+    free(status_json);
+    if (n < 0 || n >= sizeof(out)) return ESP_FAIL;
+    size_t used = n;
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, "{\"ok\":true}");
-    return ESP_OK;
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    for (uint32_t i = 0; i < count; i++) {
+        if (sizeof(out) - used < 180) {
+            if (httpd_resp_send_chunk(req, out, used) != ESP_OK) return ESP_FAIL;
+            used = 0;
+        }
+        const can_msg_entry_t *m = &frames[i];
+        n = snprintf(out + used, sizeof(out) - used,
+                     "%s{\"seq\":%lu,\"t\":%lu,\"id\":\"0x%lx\",\"dlc\":%u,\"ext\":%s,\"data\":\"",
+                     i ? "," : "", offset + i, (unsigned long)m->timestamp_ms,
+                     (unsigned long)m->id, m->dlc, m->extended ? "true" : "false");
+        if (n < 0 || (size_t)n >= sizeof(out) - used) return ESP_FAIL;
+        used += n;
+        for (uint8_t j = 0; j < m->dlc && j < 8; j++) {
+            n = snprintf(out + used, sizeof(out) - used, "%s%02X", j ? " " : "", m->data[j]);
+            if (n < 0 || (size_t)n >= sizeof(out) - used) return ESP_FAIL;
+            used += n;
+        }
+        out[used++] = '"'; out[used++] = '}';
+    }
+    out[used++] = ']'; out[used++] = '}';
+    if (httpd_resp_send_chunk(req, out, used) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 // GET /api/export — 以 CSV 流式下载全部录制数据
-static esp_err_t api_export_handler(httpd_req_t *req)
+typedef struct {
+    httpd_req_t *req;
+    can_log_status_t record;
+    bool raw;
+} export_job_t;
+
+static bool s_export_busy;
+static portMUX_TYPE s_export_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_err_t export_stream(export_job_t *job)
 {
-    can_log_status_t st;
-    can_log_get_status(&st);
-
-    if (!st.psram_ok) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Recorder unavailable (no PSRAM)");
-        return ESP_FAIL;
-    }
-    if (st.count == 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No recorded data");
-        return ESP_FAIL;
-    }
-
-    // 实时获取录制缓冲基址和已完成条数（PID 检查在下方钳位）
-    can_msg_entry_t *base = NULL;
-    uint32_t avail = 0;
-    if (can_log_get_buffer(&base, &avail) != ESP_OK || base == NULL) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Recorder buffer unavailable");
-        return ESP_FAIL;
-    }
-    if (st.count > avail) st.count = avail;
-
+    httpd_req_t *req = job->req;
+    can_log_status_t st = job->record;
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_type(req, "text/csv; charset=utf-8");
     httpd_resp_set_hdr(req, "Content-Disposition",
                        "attachment; filename=\"can_log.csv\"");
@@ -486,8 +737,10 @@ static esp_err_t api_export_handler(httpd_req_t *req)
     // CSV 表头（0x18FF0182 填转矩/转速/故障列，0x18FF0282 填电流/电压列）
     // time 列：已授时为 "2026-09-20 14:35:01.123"，未授时为 "boot+H:MM:SS.mmm"
     httpd_resp_set_hdr(req, "X-Log-Clock", time_sync_is_synced() ? "rtc" : "boot");
-    httpd_resp_sendstr_chunk(req,
-        "no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V\r\n");
+    httpd_resp_set_hdr(req, "X-Record-Session", st.session);
+    const char *header = job->raw ? "no,time,id,dlc,ext,data\r\n" :
+        "no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V\r\n";
+    if (httpd_resp_sendstr_chunk(req, header) != ESP_OK) return ESP_FAIL;
 
     // C1：分批读取 + 行缓冲攒批发送，减少 syscall 与网络小包
     can_msg_entry_t buf[EXPORT_READ_BATCH];
@@ -498,11 +751,12 @@ static esp_err_t api_export_handler(httpd_req_t *req)
     bool aborted = false;
 
     while (sent < st.count && !aborted) {
-        // 分批拷贝：写入方（RX 任务）会后写 count，条数 <= count 的环形
-        // 位置必然已写完，无需锁；批量 memcpy 到内部缓冲再逐行格式化
-        uint32_t to_read = st.count - sent;
-        if (to_read > EXPORT_READ_BATCH) to_read = EXPORT_READ_BATCH;
-        memcpy(buf, &base[sent], to_read * sizeof(can_msg_entry_t));
+        uint32_t wanted = st.count - sent;
+        if (wanted > EXPORT_READ_BATCH) wanted = EXPORT_READ_BATCH;
+        uint32_t to_read = 0;
+        can_log_status_t read_status;
+        if (can_log_read(st.session, sent, buf, wanted, &to_read, &read_status) != ESP_OK ||
+            to_read != wanted) return ESP_FAIL;
 
         for (uint32_t i = 0; i < to_read; i++) {
             seq++;
@@ -526,7 +780,18 @@ static esp_err_t api_export_handler(httpd_req_t *req)
             if (n < 0 || (size_t)n >= sizeof(line) - used) { aborted = true; break; }
             used += n;
 
-            if (m->id == SIG_ID_MOTOR_DRIVE) {
+            if (job->raw) {
+                n = snprintf(line + used, sizeof(line) - used, "%u,%u,", m->dlc, m->extended);
+                if (n < 0 || (size_t)n >= sizeof(line) - used) { aborted = true; break; }
+                used += n;
+                for (uint8_t j = 0; j < m->dlc && j < 8; j++) {
+                    n = snprintf(line + used, sizeof(line) - used, "%s%02X", j ? " " : "", m->data[j]);
+                    if (n < 0 || (size_t)n >= sizeof(line) - used) { aborted = true; break; }
+                    used += n;
+                }
+                if (aborted) break;
+                n = 0;
+            } else if (m->id == SIG_ID_MOTOR_DRIVE) {
                 sig_motor_t sg;
                 sig_decode_motor(m->data, m->dlc, &sg);
                 if (sg.valid) {
@@ -534,22 +799,23 @@ static esp_err_t api_export_handler(httpd_req_t *req)
                                  (int)sg.torque, (int)sg.speed_rpm,
                                  (unsigned)sg.fault_code, (unsigned)sg.fault_level);
                 } else {
-                    n = snprintf(line + used, sizeof(line) - used, ",,,,");
+                    n = snprintf(line + used, sizeof(line) - used, ",,,,,");
                 }
             } else if (m->id == SIG_ID_BUS_VI) {
                 sig_bus_vi_t sv;
                 sig_decode_bus_vi(m->data, m->dlc, &sv);
                 if (sv.valid) {
-                    n = snprintf(line + used, sizeof(line) - used, ",,,,%d.%d,%d.%d",
-                                 (int)sv.current_x10 / 10,
+                    n = snprintf(line + used, sizeof(line) - used, ",,,,%s%d.%d,%d.%d",
+                                 sv.current_x10 < 0 ? "-" : "",
+                                 (int)(sv.current_x10 < 0 ? -sv.current_x10 : sv.current_x10) / 10,
                                  (int)(sv.current_x10 < 0 ? -sv.current_x10 : sv.current_x10) % 10,
                                  (int)sv.voltage_x10 / 10,
                                  (int)sv.voltage_x10 % 10);
                 } else {
-                    n = snprintf(line + used, sizeof(line) - used, ",,,");
+                    n = snprintf(line + used, sizeof(line) - used, ",,,,,");
                 }
             } else {
-                n = snprintf(line + used, sizeof(line) - used, ",");
+                n = snprintf(line + used, sizeof(line) - used, ",,,,,");
             }
             if (n < 0 || (size_t)n >= sizeof(line) - used) { aborted = true; break; }
             used += n;
@@ -571,21 +837,78 @@ static esp_err_t api_export_handler(httpd_req_t *req)
         sent += to_read;
     }
 
+    if (aborted) return ESP_FAIL;
     // 刷出剩余
     if (used > 0) {
         if (httpd_resp_send_chunk(req, line, used) != ESP_OK) {
             return ESP_FAIL;
         }
     }
-    httpd_resp_send_chunk(req, NULL, 0);
+    if (httpd_resp_send_chunk(req, NULL, 0) != ESP_OK) return ESP_FAIL;
     ESP_LOGI(TAG, "Exported %u frames as CSV", (unsigned)sent);
     return ESP_OK;
+}
+
+
+static void export_task(void *arg)
+{
+    export_job_t *job = arg;
+    esp_err_t ret = export_stream(job);
+    if (ret != ESP_OK) ESP_LOGW(TAG, "CSV export interrupted; source record retained");
+    can_log_release(job->record.session);
+    int fd = httpd_req_to_sockfd(job->req);
+    httpd_handle_t server = job->req->handle;
+    httpd_req_async_handler_complete(job->req);
+    httpd_sess_trigger_close(server, fd);
+    free(job);
+    portENTER_CRITICAL(&s_export_mux);
+    s_export_busy = false;
+    portEXIT_CRITICAL(&s_export_mux);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t api_export_handler(httpd_req_t *req)
+{
+    portENTER_CRITICAL(&s_export_mux);
+    bool busy = s_export_busy;
+    if (!busy) s_export_busy = true;
+    portEXIT_CRITICAL(&s_export_mux);
+    if (busy) return json_error(req, "409 Conflict", "CSV export already in progress");
+    export_job_t *job = calloc(1, sizeof(*job));
+    can_log_status_t current;
+    can_log_get_status(&current);
+    esp_err_t err = job ? can_log_acquire(current.session, &job->record) : ESP_ERR_NO_MEM;
+    if (err == ESP_OK && !job->record.count) {
+        can_log_release(job->record.session);
+        err = ESP_ERR_INVALID_SIZE;
+    }
+    if (err == ESP_OK) {
+        char config[CAN_LOG_CONFIG_MAX_BYTES + 1];
+        err = can_log_copy_config(job->record.session, config, sizeof(config));
+        if (err == ESP_OK) job->raw = strcmp(config, "[]") != 0;
+        else can_log_release(job->record.session);
+    }
+    if (err == ESP_OK) {
+        err = httpd_req_async_handler_begin(req, &job->req);
+        if (err == ESP_OK && xTaskCreate(export_task, "csv_export", 8192, job, 2, NULL) == pdPASS) return ESP_OK;
+        can_log_release(job->record.session);
+        if (job->req) {
+            json_error(job->req, "503 Service Unavailable", "CSV export task unavailable");
+            httpd_req_async_handler_complete(job->req);
+            free(job);
+            portENTER_CRITICAL(&s_export_mux); s_export_busy = false; portEXIT_CRITICAL(&s_export_mux);
+            return ESP_OK;
+        }
+    }
+    free(job);
+    portENTER_CRITICAL(&s_export_mux); s_export_busy = false; portEXIT_CRITICAL(&s_export_mux);
+    return json_error(req, "409 Conflict", "Stop recording first; retained record required for export");
 }
 
 esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 13;
+    config.max_uri_handlers = 17;
     config.stack_size = HTTP_TASK_STACK_SIZE;
 
     esp_err_t ret = httpd_start(&s_server, &config);
@@ -600,6 +923,10 @@ esp_err_t web_server_start(void)
     httpd_uri_t clear = { .uri = "/api/clear", .method = HTTP_POST, .handler = api_clear_handler };
     httpd_uri_t rec_start = { .uri = "/api/rec/start", .method = HTTP_POST, .handler = api_rec_start_handler };
     httpd_uri_t rec_stop = { .uri = "/api/rec/stop", .method = HTTP_POST, .handler = api_rec_stop_handler };
+    httpd_uri_t rec_status = { .uri = "/api/rec/status", .method = HTTP_GET, .handler = api_rec_status_handler };
+    httpd_uri_t rec_data = { .uri = "/api/rec/data", .method = HTTP_GET, .handler = api_rec_data_handler };
+    httpd_uri_t rec_release = { .uri = "/api/rec/release", .method = HTTP_POST, .handler = api_rec_release_handler };
+    httpd_uri_t rec_ack = { .uri = "/api/rec/ack", .method = HTTP_POST, .handler = api_rec_ack_handler };
     httpd_uri_t rec_clear = { .uri = "/api/rec/clear", .method = HTTP_POST, .handler = api_rec_clear_handler };
     httpd_uri_t export = { .uri = "/api/export", .method = HTTP_GET, .handler = api_export_handler };
     httpd_uri_t time = { .uri = "/api/time", .method = HTTP_POST, .handler = api_time_handler };
@@ -614,6 +941,10 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &rec_start);
     httpd_register_uri_handler(s_server, &rec_stop);
     httpd_register_uri_handler(s_server, &rec_clear);
+    httpd_register_uri_handler(s_server, &rec_status);
+    httpd_register_uri_handler(s_server, &rec_data);
+    httpd_register_uri_handler(s_server, &rec_release);
+    httpd_register_uri_handler(s_server, &rec_ack);
     httpd_register_uri_handler(s_server, &export);
     httpd_register_uri_handler(s_server, &time);
     httpd_register_uri_handler(s_server, &signals_get);

@@ -16,20 +16,36 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
-NAME = 'CAN-WIFI_20261007_MAIL_Win64'
+NAME = 'CAN-WIFI_20261008_RECORDING_Win64'
+RELEASE = '2026.10.08 完整记录版'
+DOCUMENTS = ['serial-protocol.md', 'can-sine-test.md', 'offline-flashing.md',
+             'recording.md', 'recording-stress.md']
+HELPERS = ['can-sine-test.py', 'requirements-can-test.txt', 'provision-mail.py',
+           'can-recording-stress.py', 'verify-recording-stress.py']
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def clean_source_commit():
+    pending = subprocess.check_output(
+        ['git', 'status', '--porcelain', '--untracked-files=all'], cwd=ROOT, text=True).strip()
+    if pending:
+        raise RuntimeError('Source tree has tracked or untracked changes; commit them before packaging')
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build-mail')
     args = parser.parse_args()
+    source_commit = clean_source_commit()
     import esptool
     release = ROOT / 'release'
     package = release / NAME
+    if package.exists() and any(package.iterdir()):
+        raise RuntimeError('Output package directory is not empty; use a clean directory to avoid bundling stale files')
     firmware = package / 'firmware'
     firmware.mkdir(parents=True, exist_ok=True)
     files = [('bootloader.bin', 'bootloader/bootloader.bin', 0x0),
@@ -41,14 +57,13 @@ def main():
         raise RuntimeError('Build flash layout differs from the verified NVS-preserving layout')
     if flash_args['flash_settings'] != {'flash_mode': 'dio', 'flash_size': '16MB', 'flash_freq': '80m'}:
         raise RuntimeError('Unexpected flash configuration')
-    manifest = {'release': '2026.10.07 邮件版', 'chip': 'esp32s3', 'module': 'N16R8',
+    manifest = {'release': RELEASE, 'chip': 'esp32s3', 'module': 'N16R8',
                 'flash_mode': 'dio', 'flash_freq': '80m', 'flash_size': '16MB',
                 'can_tx': 5, 'can_rx': 4, 'can_bitrate': 250000,
                 'idf_version': '5.3.5', 'esptool_version': esptool.__version__,
                 'preserve_nvs': {'offset': '0x9000', 'size': '0x6000'}, 'images': []}
-    manifest['source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    manifest['source_dirty'] = bool(subprocess.check_output(
-        ['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True).strip())
+    manifest['source_commit'] = source_commit
+    manifest['source_dirty'] = False
     for name, source, offset in files:
         target = firmware / name
         shutil.copy2(args.build_dir / source, target)
@@ -64,14 +79,14 @@ def main():
     subprocess.run(command, cwd=ROOT, check=True)
     docs = package / 'docs'
     docs.mkdir(exist_ok=True)
-    for name in ['serial-protocol.md', 'can-sine-test.md', 'offline-flashing.md']:
+    for name in DOCUMENTS:
         shutil.copy2(ROOT / 'docs' / name, docs / name)
     shutil.copy2(ROOT / 'README.md', package / 'README.md')
     helpers = package / 'tools'
     helpers.mkdir(exist_ok=True)
-    for name in ['can-sine-test.py', 'requirements-can-test.txt', 'provision-mail.py']:
+    for name in HELPERS:
         shutil.copy2(ROOT / 'tools' / name, helpers / name)
-    readme = """CAN-WIFI 独立烧录包 · 2026.10.07 邮件版
+    readme = """CAN-WIFI 独立烧录包 · 2026.10.08 完整记录版
 ========================================
 
 适用：Windows 10/11 64位；ESP32-S3 N16R8（16MB Flash / 8MB八线PSRAM）。
@@ -84,6 +99,7 @@ def main():
 --------
 1. 将整个 ZIP 解压到本地目录，不要直接在压缩包内运行。
 2. 用 USB 数据线连接开发板，关闭占用串口的 monitor、VOFA 或其他上位机。
+   烧录前先停止 Record，等待同步完整，再下载或邮件保存需要保留的记录。
 3. 双击 CAN-WIFI-Flasher.exe，选择开发板串口（本机为 COM8，以实际识别为准）。
 4. 默认速度 460800，点击“开始烧录”，保持 USB 连接。
 5. 日志显示“烧录成功”后设备自动重启，启动可能因 PSRAM 测试等待数秒。
@@ -120,6 +136,28 @@ CSV 记录、导出、信封发邮件、串口邮箱配置和 status 邮箱字�
 发件邮箱 espdata@agent.qq.com；默认收件邮箱 lichen1435374410@163.com。
 收件地址可用串口 mailto 命令修改。
 
+完整记录与曲线
+--------------
+Record 开始后，设备将目标 CAN 原始帧写入独立 PSRAM 记录缓冲。
+网页分批读取并统一解码，曲线和 CSV 共用本次解码结果；曲线窗口不限制完整记录。
+信号定义在本次开始时冻结，后续配置修改仅用于下次录制。
+网络卡顿或网页暂时断开时设备继续记录，恢复后可按帧序号补齐。
+Stop 后自动核对并补齐，确认同步完整后才开放 CSV 下载和邮件发送。
+容量受 PSRAM 和浏览器安全内存上限约束；设备录满时明确停止，不覆盖已有记录。
+同步完整表示设备保存的帧已全部读取；接收丢失、录满及完整性未知会另行显示。
+设备原始记录位于易失 PSRAM，断电、复位或烧录重启会丢失；浏览器缓存也不是持久存储。
+需要保留的数据请及时下载或邮件发送，开始新记录前保存上一份记录。
+详见 docs/recording.md。
+
+五分钟负载验证
+--------------
+2026-10-08 实机测试：两路目标报文叠加 64 个背景 ID，运行五分钟。
+全部实际发送及设备接收均为 419,999 帧，目标记录及 CSV 均为 35,999 帧，逐帧逐行一致。
+PC 调度未发送：1 个电机时隙（独立统计，未发到总线，不属于设备漏收）。
+设备 rx_lost=0、drop=0；本次未验证邮件并发及更长连续运行。
+详见 docs/recording-stress.md。本包只包含测试工具与说明，不包含实测 CSV、
+串口快照、私人日志、OAuth 凭据或设备 NVS。
+
 升级与邮箱授权
 --------------
 在本项目原有分区布局上升级，保留 WiFi、曲线配置、收件地址和邮箱授权。
@@ -127,7 +165,7 @@ CSV 记录、导出、信封发邮件、串口邮箱配置和 status 邮箱字�
 新设备或授权失效时，仍需先完成 QQ Agent OAuth 授权，再用串口 mailauth 导入。
 该首次授权流程与固件烧录独立，详见 docs/serial-protocol.md。
 保留配置仅适用于本项目兼容布局；从其他项目迁移需自行核对已有分区。
-浏览器内的 Record 数据不属于 NVS，烧录重启前请先导出需要保留的记录。
+设备 PSRAM 原始帧及浏览器记录缓存均不属于 NVS，烧录重启前请先保存需要保留的记录。
 
 写入布局
 --------
@@ -158,8 +196,9 @@ GUI直接显示日志；命令行模式可在输出文件中查看结果，退�
 source.zip 包含本包烧录器源码、打包脚本和所用 esptool Python 源码与资源。
 licenses 中包含第三方许可；esptool 使用 GPL-2.0-or-later。
 tools 目录中的两个烧录器/打包器源码按 GPL-2.0-or-later 提供。
-docs 包含完整串口协议与正弦CAN测试说明（PCAN测试需另行安装其Python依赖）。
-tools 提供正弦测试与首次邮箱授权导入脚本；这些额外操作需要Python，不影响EXE独立烧录。
+docs 包含串口协议、正弦CAN测试、完整记录架构及五分钟负载验证说明。
+tools 提供正弦测试、记录压力测试、核对器与首次邮箱授权导入脚本；
+这些额外操作需要Python和相应依赖，不影响EXE独立烧录。
 """
     (package / '烧录说明.txt').write_text(readme, encoding='utf-8-sig')
     licenses = package / 'licenses'
@@ -195,6 +234,8 @@ tools 提供正弦测试与首次邮箱授权导入脚本；这些额外操作�
         for path in licenses.rglob('*'):
             if path.is_file():
                 archive.write(path, 'licenses/' + path.relative_to(licenses).as_posix())
+    if clean_source_commit() != source_commit:
+        raise RuntimeError('Source commit changed during packaging; rebuild from a clean committed tree')
     checksums = []
     for path in sorted(package.rglob('*')):
         if path.is_file() and path.name != 'SHA256SUMS.txt':

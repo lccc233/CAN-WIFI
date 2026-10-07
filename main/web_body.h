@@ -78,7 +78,8 @@
       </label>
       <button class="btn" id="pauseBtn">暂停</button>
       <button class="btn" id="curveRecBtn">&#9679; Record</button>
-      <span class="msg-count" id="curveRecStatus"></span>
+      <span class="record-status" id="curveRecStatus" role="status" aria-live="polite"></span>
+      <button class="btn" id="recordRetryBtn" hidden>重试同步</button>
       <span class="csv-actions">
         <button class="btn" id="csvExportBtn">导出记录CSV</button>
         <button class="btn mail-btn" id="csvMailBtn" title="发送记录 CSV 到邮箱" aria-label="发送记录 CSV 到邮箱"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></svg></button>
@@ -87,7 +88,8 @@
       <button class="btn" id="cfgImportBtn">导入配置</button>
       <input type="file" id="cfgImportFile" accept=".json,application/json" class="hidden">
     </div>
-    <div class="hint">曲线 = 用信号定义对原始帧实时解码（仅积累打开页面后的数据）；Record 记录已启用信号的解码值，可导出 CSV 离线分析</div>
+    <div class="hint">Record 由设备逐帧保存，网页解码一次用于曲线和 CSV；停止后自动补齐。曲线仅显示最近窗口，CSV 保留每帧采样。本次录制使用固定配置，后续编辑用于下次录制。</div>
+    <div class="config-save-row"><span id="cfgStatus" class="cfg-status" role="status" aria-live="polite">正在加载设备配置…</span><button class="btn" id="cfgRetryBtn">重试配置保存/加载</button></div>
     <div id="chartList"></div>
   </div>
 

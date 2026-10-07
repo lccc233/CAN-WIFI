@@ -46,6 +46,11 @@ esp_err_t can_init(void);
 esp_err_t can_send_message(uint32_t id, bool extended, uint8_t dlc, const uint8_t *data);
 void      can_get_snapshot(can_msg_entry_t *out, uint32_t max_entries,
                            uint32_t *out_count, uint32_t *out_total);
+// seq 由环形缓冲写入序号生成，不扩充每帧结构；清空监控不重置 seq。
+void      can_get_snapshot_seq(can_msg_entry_t *out, uint32_t *seq,
+                               uint32_t max_entries, uint32_t *out_count,
+                               uint32_t *out_total);
+uint32_t  can_get_boot_id(void);
 void      can_clear_ring(void);
 
 // 获取各 ID 的接收频率统计，返回写入条数（最多 max_ids 条）

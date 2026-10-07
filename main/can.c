@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "driver/twai.h"
 #include "can.h"
 #include "can_logger.h"
@@ -11,6 +12,7 @@ static const char *TAG = "can";
 
 static can_rx_ring_t g_ring;
 static SemaphoreHandle_t g_send_mutex;
+static uint32_t s_boot_id;
 
 // ---- 每个 ID 的接收频率统计 ----
 
@@ -35,8 +37,9 @@ static void twai_print_status(void);
 
 void can_clear_ring(void)
 {
+    if (!g_ring.mutex || !g_freq_mutex) return;
     xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
-    g_ring.head = 0;
+    // head 是启动以来的帧序号。只清窗口计数，避免清空后前端误判为旧帧。
     g_ring.count = 0;
     xSemaphoreGive(g_ring.mutex);
 
@@ -49,6 +52,22 @@ void can_clear_ring(void)
 void can_get_snapshot(can_msg_entry_t *out, uint32_t max_entries,
                       uint32_t *out_count, uint32_t *out_total)
 {
+    can_get_snapshot_seq(out, NULL, max_entries, out_count, out_total);
+}
+
+uint32_t can_get_boot_id(void)
+{
+    return s_boot_id;
+}
+
+void can_get_snapshot_seq(can_msg_entry_t *out, uint32_t *seq,
+                          uint32_t max_entries, uint32_t *out_count,
+                          uint32_t *out_total)
+{
+    if (!out_count || !out_total) return;
+    *out_count = 0;
+    *out_total = 0;
+    if (!g_ring.mutex || (!out && max_entries)) return;
     xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
     uint32_t total = g_ring.count;
     uint32_t available = (total < CAN_RX_RING_SIZE) ? total : CAN_RX_RING_SIZE;
@@ -56,6 +75,7 @@ void can_get_snapshot(can_msg_entry_t *out, uint32_t max_entries,
     uint32_t start = (g_ring.head - to_copy) & (CAN_RX_RING_SIZE - 1);
     for (uint32_t i = 0; i < to_copy; i++) {
         out[i] = g_ring.entries[(start + i) & (CAN_RX_RING_SIZE - 1)];
+        if (seq) seq[i] = g_ring.head - to_copy + i;
     }
     *out_count = to_copy;
     *out_total = total;
@@ -165,19 +185,24 @@ static void can_rx_task(void *arg)
             // 驱动会原样上报 DLC 而只填 8 字节，必须钳位防下方 memcpy 越界
             if (rx_msg.data_length_code > 8) rx_msg.data_length_code = 8;
             uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            can_msg_entry_t entry = {
+                .timestamp_ms = now_ms,
+                .id = rx_msg.identifier,
+                .dlc = rx_msg.rtr ? 0 : rx_msg.data_length_code,
+                .extended = rx_msg.extd,
+            };
+            if (!rx_msg.rtr) {
+                memcpy(entry.data, rx_msg.data, entry.dlc);
+                // 记录优先于监控和频率统计，且不引用可能被清空/覆盖的环形槽。
+                can_log_write(&entry);
+            }
             xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
             uint32_t idx = g_ring.head & (CAN_RX_RING_SIZE - 1);
-            g_ring.entries[idx].timestamp_ms = now_ms;
-            g_ring.entries[idx].id = rx_msg.identifier;
-            g_ring.entries[idx].dlc = rx_msg.data_length_code;
-            g_ring.entries[idx].extended = rx_msg.extd;
-            memset(g_ring.entries[idx].data, 0, 8);
-            memcpy(g_ring.entries[idx].data, rx_msg.data, rx_msg.data_length_code);
+            g_ring.entries[idx] = entry;
             g_ring.head++;
-            g_ring.count = g_ring.head;
+            if (g_ring.count < UINT32_MAX) g_ring.count++;
             xSemaphoreGive(g_ring.mutex);
             can_freq_record(rx_msg.identifier, now_ms);
-            can_log_write(&g_ring.entries[idx]);
         }
     }
 }
@@ -263,6 +288,7 @@ esp_err_t can_init(void)
 {
     g_ring.head = 0;
     g_ring.count = 0;
+    s_boot_id = esp_random();
     g_ring.mutex = xSemaphoreCreateMutex();
     g_send_mutex = xSemaphoreCreateMutex();
     g_freq_mutex = xSemaphoreCreateMutex();

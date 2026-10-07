@@ -1,89 +1,69 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import { boot, device, signal, frame, deferred, response, until } from './recording-ui-harness.mjs';
 
-const source = fs.readFileSync(new URL('../main/web_js.h', import.meta.url), 'utf8')
-  .split('<script>')[1].split('</script>')[0];
-const elements = new Map();
-function element(id) {
-  if (!elements.has(id)) {
-    const classes = new Set();
-    elements.set(id, { textContent: '', style: {}, attributes: {}, value: '30000',
-      classList: { add: (...a) => a.forEach(x => classes.add(x)), remove: (...a) => a.forEach(x => classes.delete(x)), contains: x => classes.has(x) },
-      setAttribute(k, v) { this.attributes[k] = v; }, addEventListener() {}, click() {}, classes });
-  }
-  return elements.get(id);
-}
-let sendRequest, finish;
-let mailCalls = 0;
-const context = vm.createContext({ Blob, URL, Date, TypeError, console,
-  document: { getElementById: element, createElement: () => element('download') },
-  window: { addEventListener() {} },
-  localStorage: { getItem() { return null; }, setItem() {} },
-  setInterval() {}, setTimeout() {}, clearTimeout() {}, alert() {},
-  fetch(url, request) {
-    if (url === '/api/mail/send') {
-      mailCalls++;
-      sendRequest = request;
-      return new Promise((resolve, reject) => { finish = { resolve, reject }; });
-    }
-    return Promise.resolve({ text: async () => url === '/api/signals' ? '[]' : '{"total":0}', json: async () => ({ ok: true }) });
-  }
-});
-vm.runInContext(source, context);
-await new Promise(resolve => setImmediate(resolve));
-const notices = [];
-context.toast = message => notices.push(message);
+const backend = device([
+  signal({ id: '0x100', name: '温度', unit: '°C', factor: 0.1 }),
+  signal({ id: '0x200', name: '=危险,列', unit: 'V', factor: 0.1 })
+]);
+const instance = await boot(backend);
+const { context, element, notices, downloads } = instance;
 const btn = element('csvMailBtn');
+let finish = null, sendRequest = null;
+backend.mailHook = request => { sendRequest = request; finish = deferred(); return finish.promise; };
+const calls = () => backend.calls.filter(x => x.url === '/api/mail/send').length;
 
-await context.curveRecSendCsv();
-assert.equal(mailCalls, 0, 'Empty recordings must never send mail');
-assert.match(notices.at(-1), /暂无记录/);
+try {
+  await context.curveRecSendCsv();
+  assert.equal(calls(), 0, 'Empty recordings must never send mail');
+  await context.curveRecToggle();
+  backend.append(frame(0, 250, { id: '0x100', t: 100 }),
+    frame(1, 125, { id: '0x200', t: 150 }), frame(2, 260, { id: '0x100', t: 200 }));
+  await context.curveRecToggle();
+  assert(context.recordComplete());
+  const csv = await context.curveRecBuildCsv();
+  const exported = await csv.blob.text();
+  assert.equal(exported, "no,time_rel_ms,温度(°C)@0x100,'=危险_列(V)@0x200\n0,0,25,\n1,50,,12.5\n2,100,26,\n");
+  await context.curveRecExportCsv();
+  assert.equal(await downloads.at(-1).blob.text(), exported);
 
-context.configs = [
-  { id: '0x100', name: '温度', unit: '°C', enabled: true },
-  { id: '0x200', name: '=危险,列', unit: 'V', enabled: true }
-];
-context.curveRecData = {
-  '0x100|温度': [{ t: 100, v: 25 }, { t: 200, v: 26 }],
-  '0x200|=危险,列': [{ t: 150, v: 12.5 }]
-};
-const csv = context.curveRecBuildCsv();
-const exported = await csv.blob.text();
-assert.equal(exported, "no,time_rel_ms,温度(°C)@0x100,'=危险_列(V)@0x200\n0,0,25.00,\n1,50,,12.50\n2,100,26.00,");
+  const sending = context.curveRecSendCsv();
+  await until(() => calls() === 1);
+  assert(btn.classList.contains('sending')); assert.equal(btn.disabled, true);
+  assert.equal(btn.attributes['aria-busy'], 'true');
+  assert.equal(await sendRequest.body.text(), exported, 'Email and download must contain identical frozen CSV');
+  assert.match(sendRequest.headers['X-CSV-Filename'], /^can_signals_[0-9a-f]{16}\.csv$/);
+  await context.curveRecSendCsv(); assert.equal(calls(), 1, 'Repeated clicks must not duplicate pending mail');
+  const oldSession = context.recordState.session;
+  await context.curveRecToggle();
+  assert.equal(context.recordState.session, oldSession, 'New record cannot replace source while mail is sending');
+  finish.resolve(response({ ok: true, message: '邮件服务已接受发送' })); await sending;
+  assert(btn.classList.contains('success')); assert(!btn.classList.contains('sending')); assert.equal(btn.disabled, false);
 
-const sending = context.curveRecSendCsv();
-assert(btn.classList.contains('sending'));
-assert.equal(btn.disabled, true);
-assert.equal(btn.attributes['aria-busy'], 'true');
-assert.equal(await sendRequest.body.text(), exported, 'Email attachment must match downloaded CSV');
-assert.match(sendRequest.headers['X-CSV-Filename'], /^can_signals_\d+\.csv$/);
-await context.curveRecSendCsv();
-assert.equal(mailCalls, 1, 'Repeated clicks must not duplicate a pending email');
-finish.resolve({ ok: true, json: async () => ({ ok: true, message: '邮件服务已接受发送' }) });
-await sending;
-assert(btn.classList.contains('success'));
-assert(!btn.classList.contains('sending'));
-assert.equal(btn.disabled, false);
+  // Editing the next-record draft never changes the attachment of this record.
+  context.configs = [signal({ name: 'Changed', factor: 100 })]; context.saveCfg();
+  const rejected = context.curveRecSendCsv(); await until(() => calls() === 2);
+  assert.equal(await sendRequest.body.text(), exported);
+  finish.resolve(response({ ok: false, message: '邮箱授权失效' }, 400)); await rejected;
+  assert(btn.classList.contains('failed')); assert(!btn.classList.contains('success'));
+  assert.match(btn.title, /授权失效/); assert.equal(btn.disabled, false);
+  assert.equal(context.recordNext, 3); assert.equal(backend.rec.protected, true);
 
-const rejected = context.curveRecSendCsv();
-finish.resolve({ ok: false, json: async () => ({ ok: false, message: '邮箱授权失效' }) });
-await rejected;
-assert(btn.classList.contains('failed'));
-assert(!btn.classList.contains('success'));
-assert.match(btn.title, /授权失效/);
-assert.equal(btn.disabled, false);
+  const lost = context.curveRecSendCsv(); await until(() => calls() === 3);
+  finish.reject(new TypeError('Failed to fetch')); await lost;
+  assert(btn.classList.contains('failed')); assert.match(btn.title, /结果未确认/);
+  assert.equal(context.recordNext, 3); assert.equal(backend.rec.protected, true);
 
-const lostConnection = context.curveRecSendCsv();
-finish.reject(new TypeError('Failed to fetch'));
-await lostConnection;
-assert(btn.classList.contains('failed'));
-assert.match(btn.title, /结果未确认/);
+  const savedBuilder = context.curveRecBuildCsv;
+  context.curveRecBuildCsv = async () => { throw new Error('CSV 超过 20MB 上限'); };
+  const before = calls(); await context.curveRecSendCsv();
+  assert.equal(calls(), before, 'Oversize failure must never send a truncated attachment');
+  assert(btn.classList.contains('failed')); assert.match(notices.at(-1), /20MB/);
+  context.curveRecBuildCsv = savedBuilder;
 
-const oldRecording = context.curveRecSendCsv();
-context.curveRecToggle();
-finish.resolve({ ok: true, json: async () => ({ ok: true, message: '邮件服务已接受发送' }) });
-await oldRecording;
-assert(!btn.classList.contains('success'), 'A sent old recording must not mark the new recording green');
-assert.equal(btn.disabled, false);
-console.log('Mail UI checks passed: CSV parity/Unicode, empty recording, sending/success/error, duplicate click, connection loss, new recording.');
+  await context.curveRecToggle();
+  assert.equal(context.curveRecOn, true); assert.notEqual(context.recordState.session, oldSession);
+  assert(!btn.classList.contains('success') && !btn.classList.contains('failed'),
+    'An accepted new recording clears the previous mail result');
+  assert.equal(btn.disabled, true, 'Export stays unavailable during a new active recording');
+  console.log('Mail UI checks passed: async frozen CSV/download parity, Unicode/formula headers, sending/success/error, duplicate click, connection loss, source retention, size failure, new recording gate.');
+} finally { instance.dispose(); }

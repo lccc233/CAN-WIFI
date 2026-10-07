@@ -79,7 +79,8 @@ class FlasherWindow:
         self.root = root
         self.events = queue.Queue()
         self.busy = False
-        root.title('CAN-WIFI 离线烧录器 · 2026.10.07 邮件版')
+        manifest, _ = verified_images()
+        root.title(f"CAN-WIFI 离线烧录器 · {manifest['release']}")
         root.geometry('860x570')
         root.minsize(740, 480)
         root.protocol('WM_DELETE_WINDOW', self.close)
@@ -88,6 +89,7 @@ class FlasherWindow:
         ttk.Label(frame, text='CAN-WIFI 固件烧录', font=('Microsoft YaHei UI', 17, 'bold')).pack(anchor='w')
         ttk.Label(frame, text='ESP32-S3 N16R8 · 16MB Flash / 8MB PSRAM · CAN TX=GPIO5 / RX=GPIO4 · 250kbps').pack(anchor='w', pady=(8, 4))
         ttk.Label(frame, text='内置固件与烧录工具，可离线使用；升级保留 WiFi、邮箱授权及曲线配置。').pack(anchor='w')
+        ttk.Label(frame, text='烧录前请停止记录、等待同步完整并保存 CSV；重启会清空设备 PSRAM 原始记录。').pack(anchor='w')
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=16)
         ttk.Label(row, text='设备串口').pack(side='left')
@@ -111,7 +113,6 @@ class FlasherWindow:
         self.log.configure(state='disabled')
         ttk.Label(frame, text='请先关闭串口终端。若连接失败：换数据线，或按住 BOOT、点按 RESET 后重试；不稳定时选 115200。').pack(anchor='w', pady=(10, 0))
         self.refresh()
-        manifest, _ = verified_images()
         self.append(f"固件 SHA-256 校验通过：{manifest['release']}\n仅写入 bootloader、分区表、应用，保留 0x9000～0xEFFF 的 NVS。\n")
         root.after(60, self.poll)
 

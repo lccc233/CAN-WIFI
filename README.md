@@ -1,6 +1,6 @@
 # ESP32-S3 CAN Bus Monitor
 
-基于 ESP-IDF 的 CAN 总线监控工具：ESP32-S3 通过 TWAI（CAN 2.0）接收总线数据，以 Web 页面实时展示，支持手动发送 CAN 帧；曲线与记录全部在**浏览器前端**完成（自定义信号解码 + 解码值记录导出），固件不参与解码。
+基于 ESP-IDF 的 CAN 总线监控工具：ESP32-S3 通过 TWAI（CAN 2.0）接收总线数据，以 Web 页面实时展示，支持手动发送 CAN 帧；完整原始帧记录保存在**设备 PSRAM**，浏览器按帧序号分批读取并统一解码，用于实时曲线和 CSV。
 
 ## 功能
 
@@ -12,28 +12,32 @@
   - 点击某行进入该 ID 的**原始报文历史表**（自动滚动跟随最新），无内部曲线
   - 发送面板固定在 CAN Monitor 页面底部；进入详情页时隐藏（替换为返回按钮）
   - 支持手动发送任意 CAN 帧、一键清空
-- **自定义曲线页**（固件零改动，全部在浏览器实现）：
+- **自定义曲线页**（信号解码和绘图在浏览器实现）：
   - 在详情页用「+ 添加曲线」为**任意 CAN ID** 定义信号：起始位/位长/字节序（DBC 位号，Motorola=MSB 位号、Intel=LSB 位号）/符号/factor/offset/单位/颜色，`值 = raw × factor + offset`
   - 每个信号一条独立曲线带（自动量程 + niceStep 刻度），窗口 10s/30s/60s 可切换，可暂停冻结读数
   - Monitor 主表与详情表中，已配置信号覆盖的**字节按信号颜色高亮**，实时数值随轮询刷新
-  - **曲线数据记录器**：Record 记录已启用信号的解码值（每信号上限 20 万点 ≈ 1 小时 @50Hz），
-    「导出记录CSV」下载宽表（`no,time_rel_ms,信号(单位)@ID,...`），Excel/Python 可直接离线分析
+  - **完整数据记录器**：Record 在设备逐帧保存已启用信号对应 ID 的原始报文，固定本次信号配置；
+    网页每批读取最多 128 帧，解码结果共用于曲线和完整记录，停止后自动核对、补齐并确认最终帧数。
+    显示“同步完整”后开放「导出记录CSV」和邮件；CSV 每个原始帧一行，保留同时间戳的不同帧，
+    列为 `no,time_rel_ms,信号(单位)@ID,...`，其他 ID 或长度不足的信号留空，数值不使用显示缩写。
   - 信号配置**双份持久化**：浏览器 localStorage + **设备 NVS**（断电不丢，换手机打开页面自动从设备拉取；
     「导出配置」备份为 JSON 迷你 DBC，「导入配置」一键恢复）
-  - 限制：浏览器只积累**打开页面之后**的数据（200ms 轮询快照去重）；长期历史用导出 CSV 分析
+  - 配置保存明确显示成功/失败，主动清空不会被旧浏览器缓存恢复；录制期间编辑用于下次录制。
+  - 录满自动停止并保留已有记录，报告接收丢帧/未知状态；页面刷新或断网恢复可重新读取设备记录。
+    PSRAM 为易失存储，设备断电/重启会丢失设备内原始记录。详细容量、恢复和限制见 [记录与导出说明](docs/recording.md)。
 - **浏览器授时**：打开页面自动 `POST /api/time` 校准，原始帧备份 CSV（`/api/export`）的 `time` 列为真实时间
   （未授时时回退为开机相对时间 `boot + HH:MM:SS.mmm`）
-- **CSV 邮件附件**：自定义曲线页“导出记录CSV”后面的信封按钮，发送点击时的已记录信号宽表 CSV；
+- **CSV 邮件附件**：自定义曲线页“导出记录CSV”后面的信封按钮，停止并同步完整后发送本次信号宽表 CSV；
   使用与下载共用的 CSV 生成函数。发送时信封黄色慢闪，邮件服务明确接受后绿色，失败红色并提示原因。
   ESP32-S3 独立通过 HTTPS 调用 QQ Agent 邮箱接口，自动刷新 OAuth 凭据，运行时不需要电脑代发。
   发件地址固定 `espdata@agent.qq.com`，默认收件地址 `lichen1435374410@163.com`，串口 `mailto` 可修改并保存。
   附件上限 20MB（同时遵守邮箱账户返回的更低限制），分块 Base64 + SHA-1 流式发送，避免整份附件占用 PSRAM。
-- **设备端原始帧备份导出**（无页面 UI，仅 API 备用）：
-  - `POST /api/rec/start` / `POST /api/rec/stop` 可用 curl 触发 PSRAM 录制
-    （只录 0x18FF0182/0x18FF0282 两 ID，约 37 万条 ≈ 52 分钟，录满自动停止）
-  - 浏览器直接访问 `http://<设备IP>/api/export` 下载物理值 CSV：
-    `no,time,id,torque,speed_rpm,fault_code,fault_level,current_A,voltage_V`
-  - 日常使用建议用**自定义曲线页的前端记录器**（记录已配置信号的解码值，导出宽表 CSV）
+- **设备端备用导出**（API）：
+  - 网页录制使用同一 PSRAM 记录器，目标 ID 由本次启用信号确定；6MiB 最多约 35 万帧，
+    当前两路合计 120 帧/秒时约 48.5 分钟，实际容量由页面显示。
+  - 停止后访问 `/api/export` 可异步下载原始帧 CSV：`no,time,id,dlc,ext,data`，
+    适合保留源数据；自定义解码宽表使用网页 CSV 下载。
+  - 保留无 body 的 `POST /api/rec/start` 旧版双 ID 录制，此模式 `/api/export` 仍导出原有固定物理值列。
 - **WiFi 双模式（串口可配，NVS 持久化）**：
   - **STA 模式**（默认）：连接现有路由器/热点，SSID、密码经串口命令设置（默认 `ABCDEF`/`A12345678`）
   - **AP 模式**：设备自建热点 `CAN-Monitor-XXXX`（XXXX=MAC 后 4 位，密码 `12345678`），
@@ -61,12 +65,14 @@
 
 ## 构建与烧录
 
-无需安装开发环境的 Windows 64位独立烧录包：[GitHub Release 下载](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.07-mail)。
-附件为 `CAN-WIFI_20261007_MAIL_Win64.zip`；本地打包输出在 `release/` 目录。
+无需安装开发环境的 Windows 64位独立烧录包：[GitHub Release 下载](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.08-recording)。
+附件为 `CAN-WIFI_20261008_RECORDING_Win64.zip`，包含完整记录新版；本地打包输出在 `release/` 目录。
 解压后双击 `CAN-WIFI-Flasher.exe`，选择串口即可离线烧录；EXE 内置工具与固件，升级保留配置。
 也支持 [乐鑫官方网页烧录](https://espressif.github.io/esptool-js/)，选择包内三个 BIN，地址为 `0x0`、`0x8000`、`0x10000`，
 参数 DIO / 80MHz / 16MB，保留配置时不要点击 Erase Flash。
 完整说明见 [独立 EXE 与官方网页版烧录方法](docs/offline-flashing.md)。
+
+新版已通过[五分钟 CAN 高负载实机验证](docs/recording-stress.md)：四路正弦与 64 个背景 ID 同时运行，实际发送的全部目标帧及 CSV 完整匹配。
 
 ```bash
 idf.py -B build-mail -D SDKCONFIG=build-mail/sdkconfig -p <COM口> build flash monitor
@@ -86,7 +92,7 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 >
 > **改了网页后烧录了却看不到变化？** 浏览器缓存了旧页面，按 `Ctrl+Shift+R` 强制刷新。
 >
-> **怀疑改动没生效？** 比对时间戳：`build/can_monitor.bin` 应该新于 `main/` 下的源文件。
+> **怀疑改动没生效？** 比对时间戳：`build-mail/can_monitor.bin` 应该新于 `main/` 下的源文件。
 
 ## 使用
 
@@ -101,11 +107,11 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
    （Motorola 起始位=MSB 位号 byte0 整字节=7；Intel=LSB 位号 byte0=0），
    或直接用**预置的 4 个信号**（Torque/Speed/Current/Voltage）；顶部页签切到
    「自定义曲线」看每个信号一条曲线带（窗口 10s/30s/60s，可暂停）
-6. **记录/导出**：自定义曲线页点 `● Record` 记录已启用信号的解码值（状态栏显示
-   `● REC n pts 时长`），停止后点「导出记录CSV」下载宽表 CSV（Excel/Python 可直接分析）；
+6. **记录/导出**：自定义曲线页点 `● Record`，设备保存已启用信号对应 ID 的原始帧，网页统一解码。
+   停止后等待“同步完整”，再点「导出记录CSV」下载宽表 CSV（Excel/Python 可直接分析）；
    「导出配置」把信号定义备份为 JSON
 7. **原始帧备份**（可选）：浏览器直接访问 `http://<设备IP>/api/export`
-   下载设备 PSRAM 录制的物理值 CSV（需先用 curl `POST /api/rec/start|stop` 触发）
+   下载已停止记录的源数据 CSV（网页录制为原始帧列；旧版无 body 录制为固定物理值列）
 
 ### 串口配置命令
 
@@ -152,7 +158,7 @@ mailcheck           验证设备 HTTPS、邮箱身份和自动续期（不发信
 3. 设备 STA 模式连接能上网的路由器/手机热点，打开设备页面以校准 UTC 系统时间（用于 HTTPS 证书校验）。
    可在串口执行 `mailcheck` 验证设备连接，不会发送测试邮件。
 4. 自定义曲线页 Record → Stop → 点击 CSV 导出旁的信封；无需先下载到电脑。
-   录制中也可发送点击时的快照，后续采样不会改变正在上传的附件。
+   先停止记录并等待“同步完整”，再发送；发送失败保留数据，不影响之后下载或重试。
 5. 修改收件地址：`mailto someone@example.com`；用 `mail` 查看保存结果。
 
 绿色表示服务响应 `queued:true`，已接受投递，不等同于收件人已收到。
@@ -197,25 +203,29 @@ OAuth 授权仅用于首次配置；之后由设备保存轮换的 refresh token
 | 母线电压 | byte2-3 | `raw × 0.1` (V) | 0 ~ 1000.0 |
 
 - **哨兵值**：电流原始值 `0x2710` 表示“U 相电流零漂故障”。自定义曲线页的通用解码器
-  **不识别哨兵**（Current 会显示 0.0A、Voltage 1000V）；设备端 `/api/export` CSV 导出原始值
+  **不识别哨兵**（Current 会显示 0.0A、Voltage 1000V）；网页录制的 `/api/export` 保留原始报文
 - **字节序不确定**：自定义信号的幅值方向明显不对时，在「编辑信号」里直接把
   字节序切成 Motorola/Intel 即可（前端解码，无需重编译）
-- 设备端固定解码仍用 `SIG_LITTLE_ENDIAN`（`main/signal_decode.h`，影响 /api/export 的 CSV 列）
+- 旧版无 body 录制的固定解码仍用 `SIG_LITTLE_ENDIAN`（`main/signal_decode.h`，仅影响旧模式 `/api/export` 的物理值列）
 
 ## Web API
 
 | 接口 | 说明 |
 |------|------|
-| `GET /api/messages` | 返回 `{clk:{sync,boot,ep}, rec:{on,cnt,cap,drop,ms,psram}, total, freqs:[{id,f}], messages:[{t,id,dlc,ext,data}]}`；服务端忙闸期间秒回 `{"busy":1}` |
+| `GET /api/messages` | 返回 `{boot,clk:{sync,boot,ep},rec,total,freqs:[{id,f}],messages:[{seq,t,id,dlc,ext,data}]}`；`rec` 含记录编号、容量及采集质量；服务端忙闸期间秒回 `{"busy":1}` |
 | `POST /api/time` | 浏览器授时：body `{epoch_ms, tz}`（UTC 毫秒 + 时区偏移分钟） |
 | `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended）；id 越界（标准帧 >0x7FF / 扩展帧 >0x1FFFFFFF）或 dlc 非法时返回 400 |
 | `POST /api/clear` | 清空消息缓冲与频率统计 |
-| `POST /api/rec/start` | 开始 PSRAM 原始帧录制（无页面 UI，curl 备用） |
-| `POST /api/rec/stop` | 停止录制（保留数据） |
-| `POST /api/rec/clear` | 清空录制缓冲 |
-| `GET /api/signals` | 自定义曲线信号配置：返回存储的 JSON 数组（未存过返回 `[]`） |
-| `POST /api/signals` | 保存信号配置到设备 NVS（body 为配置数组，逐条校验：id 为 0x 开头十六进制 ≤16 字符、name ≤64 字符、最多 64 条，不合法返回 400；上限 ~3500 字节，响应 `{"ok":true,"n":N}`）；页面每次改动自动保存 |
-| `GET /api/export` | CSV 流式下载全部录制数据（物理值列，time 列已授时为真实时间） |
+| `POST /api/rec/start` | body `{signals:[...]}` 开始完整录制并冻结配置；无 body 保留旧版双 ID 模式 |
+| `POST /api/rec/stop` | body `{session}` 原子停止并返回最终帧数/配置，保留数据 |
+| `GET /api/rec/status` | 返回当前记录状态和本次固定信号配置 |
+| `GET /api/rec/data` | `?session=...&client=...&from=...` 按序号返回最多 128 帧，并续期同步保护 |
+| `POST /api/rec/ack` | `{session,client,count}` 确认已停止记录全部处理，返回可重试回执 |
+| `POST /api/rec/release` | `{session,client}` 显式释放上一份已停止记录，其他页面同步/导出时拒绝 |
+| `POST /api/rec/clear` | 仅允许清空已停止、已释放且无同步/导出读者的记录 |
+| `GET /api/signals` | 兼容数组响应；`?meta=1` 返回 `{ok,configured,signals}`，区分未配置与主动清空 |
+| `POST /api/signals` | 完整校验配置数组并保存到 NVS；最多 64 条/3500 UTF-8 字节，校验位域、类型、有限倍率/偏移及重复信号；页面显示保存结果 |
+| `GET /api/export` | 已停止记录的异步备用 CSV 下载；网页录制为原始帧，旧版无 body 录制为固定物理值列 |
 | `POST /api/mail/send` | body 为前端记录 CSV，`X-CSV-Filename` 为 ASCII `.csv` 文件名；异步任务流式发信，服务接受后返回 `{ok:true,message}`，并发发送返回 409；失败保留浏览器记录 |
 
 ## 目录结构
@@ -224,7 +234,7 @@ OAuth 授权仅用于首次配置；之后由设备保存轮换的 refresh token
 main/
 ├── main.c             # 初始化：NVS → WiFi(AP/STA) → CAN → 记录器 → Web → LED → 串口配置台
 ├── can.c / can.h      # TWAI 驱动、RX 任务、每 ID 频率统计
-├── can_logger.c/.h    # PSRAM 录制缓冲（双 ID 过滤，录满即停）
+├── can_logger.c/.h    # PSRAM 完整录制（配置 ID 过滤、会话/序号/同步保护，录满即停）
 ├── mail_sender.c/.h   # QQ Agent OAuth 续期、邮箱身份验证、CSV 邮件附件流式发送
 ├── signal_decode.c/.h # 0x18FF0182/0x18FF0282 信号解码（/api/export CSV 物理值列用）
 ├── wifi.c / wifi.h    # WiFi AP/STA 双模式 + NVS 配置 + IP 自动绑定 .250 + mDNS + 断线重连
@@ -237,4 +247,3 @@ main/
 
 sdkconfig.defaults # kconfig 默认值（PSRAM/Flash），改配置改这里，不要手改 sdkconfig
 ```
-

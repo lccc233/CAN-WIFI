@@ -1,9 +1,9 @@
 # Windows 独立烧录包
 
-下载：[GitHub Release · v2026.10.07-mail](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.07-mail)。
+下载：[GitHub Release · v2026.10.08-recording](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.08-recording)。
 
-发布目录：`release/CAN-WIFI_20261007_MAIL_Win64/`。
-压缩包：`release/CAN-WIFI_20261007_MAIL_Win64.zip`。
+发布目录：`release/CAN-WIFI_20261008_RECORDING_Win64/`。
+压缩包：`release/CAN-WIFI_20261008_RECORDING_Win64.zip`。
 
 适用 Windows 10/11 64位与 ESP32-S3 N16R8（16MB Flash、8MB八线 PSRAM）。
 EXE 内嵌 Python 运行时、esptool 4.12.0、Tk 图形界面及本版固件，无需预装 Python、ESP-IDF 或 Node.js，烧录可完全离线。
@@ -47,7 +47,7 @@ EXE 内包含全部固件，仅复制这个 EXE 到其他目录也能烧录。
 连接失败可按住 BOOT、点按 RESET 后松开 BOOT，再重新 Connect；通信不稳定可降到 115200 重试。
 首次打开网页需加载在线资源，准备完全离线烧录时使用本包 EXE。
 
-以上按钮和参数依据 [乐鑫官方工具及源码](https://github.com/espressif/esptool-js) 核对；本版本已验证 EXE 实机烧录，未重复执行网页版实机烧录。
+以上按钮和参数依据 [乐鑫官方工具及源码](https://github.com/espressif/esptool-js) 核对；独立 EXE 烧录流程此前已实机验证，完整记录固件已实机烧录及压力测试。网页版未重复执行实机烧录。
 
 ## 配置保留与邮箱授权
 
@@ -60,12 +60,13 @@ EXE 内包含全部固件，仅复制这个 EXE 到其他目录也能烧录。
 | `0x10000` | can_monitor.bin |
 
 本项目 NVS 的 `0x9000～0xEFFF` 不在写入区域，兼容布局升级保留 WiFi、收件地址、邮箱授权和曲线信号配置。
-浏览器 Record 数据不属于 NVS，需要时先导出记录再烧录。
+设备 PSRAM 原始帧和浏览器内 Record 数据均不属于 NVS；烧录重启前先停止、等待同步完整并导出需要保留的记录。
 从其他项目迁移时应核对分区布局；本说明的配置保留适用于本项目兼容布局。
 
 本包不包含用户的 OAuth 凭据或设备 NVS。已有设备保留授权，新板需首次授权与串口 `mailauth` 导入，见 [串口协议](serial-protocol.md)。
 发件邮箱 `espdata@agent.qq.com`，默认收件邮箱 `lichen1435374410@163.com`。
-CAN TX=GPIO5、RX=GPIO4、250kbps；支持 CSV 信封发送和串口 `status` 邮箱字段。
+CAN TX=GPIO5、RX=GPIO4、250kbps；支持设备端完整记录、停止自动补齐、自定义 CSV 信封发送和串口 `status` 邮箱字段。
+录制时固定本次信号配置；容量、断电风险与恢复方法见 [记录与导出说明](recording.md)，验证结果见 [五分钟压力测试](recording-stress.md)。
 
 不使用整片擦除，也不合并三段为包含填充区的原始 BIN；填充区从 0 地址写入会覆盖 NVS。
 `firmware` 目录提供原始文件、大小及 SHA-256 清单，供其他烧录器按表中地址使用。
@@ -76,8 +77,8 @@ CAN TX=GPIO5、RX=GPIO4、250kbps；支持 CSV 信封发送和串口 `status` �
 - `CAN-WIFI-Flasher.exe`：图形烧录器，内嵌运行环境和固件。
 - `烧录说明.txt`：接线、使用、默认值与故障处理。
 - `firmware/`：三段 BIN 与 manifest.json。
-- `docs/`：串口协议、正弦 CAN 测试说明、本说明。
-- `tools/`：正弦 CAN 测试和首次邮箱授权导入脚本，额外操作需安装 Python，独立 EXE 烧录不需要。
+- `docs/`：串口协议、记录与导出说明、正弦/压力 CAN 测试、本说明。
+- `tools/`：正弦/压力 CAN 测试、记录核对和首次邮箱授权导入脚本，额外操作需安装 Python，独立 EXE 烧录不需要。
 - `SHA256SUMS.txt`：包内文件 SHA-256 清单。
 - `source.zip`、`licenses/`、`THIRD-PARTY-NOTICES.txt`：烧录器及 esptool 源码、资源与许可。
 

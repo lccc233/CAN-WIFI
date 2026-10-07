@@ -162,6 +162,10 @@
   #curveRecBtn.recording { background: #ea4335; color: #fff; border-color: #ea4335;
                            animation: recblink 1.2s infinite; }
   .csv-actions { display: inline-flex; align-items: center; gap: 8px; }
+  .record-status, .cfg-status { font-size: 0.78rem; color: #188038; overflow-wrap: anywhere; }
+  .record-status.error, .cfg-status.error { color: #c5221f; }
+  .config-save-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px; flex-wrap: wrap; }
+  button:disabled { cursor: default; opacity: .55; }
   .mail-btn { display: inline-flex; align-items: center; justify-content: center; padding: 5px 9px; }
   .mail-btn svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
   .mail-btn.sending { color: #a66a00; border-color: #e4b400; background: #fff7d6; animation: mailblink 2s ease-in-out infinite; }
