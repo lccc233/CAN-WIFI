@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -15,10 +16,11 @@
 #include "wifi.h"
 #include "can.h"
 #include "serial_cli.h"
+#include "mail_sender.h"
 
 static const char *TAG = "cli";
 
-#define CLI_LINE_MAX  128
+#define CLI_LINE_MAX  2048
 #define CLI_POLL_MS   20
 
 // 每个串口一个独立的行缓冲（两个口可同时输入，互不干扰）
@@ -27,6 +29,7 @@ typedef struct {
     char buf[CLI_LINE_MAX];
     size_t len;
     bool last_cr;      // 上一字符是 \r（用于吞掉 \r\n 的 \n）
+    bool overflow;
 } cli_port_t;
 
 // ================= 输出辅助 =================
@@ -48,13 +51,17 @@ static void print_help(void)
     printf("\r\n命令列表:\r\n");
     printf("  help              显示本帮助\r\n");
     printf("  info              显示当前设备状态（WiFi/CAN/运行时间）\r\n");
-    printf("  status            以单行 JSON 输出状态（供上位机读取）\r\n");
+    printf("  status            以单行 JSON 输出 WiFi/CAN/邮箱状态（供上位机读取）\r\n");
     printf("  mode ap|sta       切换 AP(热点)/STA 模式（保存后重启生效）\r\n");
     printf("  ssid <名称>       设置 STA 连接的 WiFi 名称（保存并立即重连）\r\n");
     printf("  pass <密码>       设置 STA 密码（8~63 字符，保存并立即重连）\r\n");
     printf("  ip                查看当前 IP 配置\r\n");
     printf("  ip auto           自动绑定当前网段的 xxx.xxx.xxx.250\r\n");
     printf("  ip <x.x.x.x>      设置固定 IP 地址\r\n");
+    printf("  mail              查看发件邮箱、收件邮箱和授权状态\r\n");
+    printf("  mailto <邮箱>     设置收件邮箱（保存到 NVS）\r\n");
+    printf("  mailauth <JSON>   导入邮箱 OAuth 授权（输入不回显凭据）\r\n");
+    printf("  mailcheck         验证设备邮箱连接及自动续期（不发信）\r\n");
     printf("  reboot            重启设备\r\n");
 }
 
@@ -161,6 +168,11 @@ static void cmd_status(void)
            sip, MDNS_HOSTNAME,
            (unsigned long)(esp_timer_get_time() / 1000000ULL),
            (unsigned)ring_cnt, (unsigned)total);
+    char recipient[MAIL_ADDRESS_MAX];
+    mail_get_recipient(recipient, sizeof(recipient));
+    printf("\"mail_from\":\"%s\",\"mail_to\":\"", MAIL_SENDER);
+    json_print_escaped(recipient);
+    printf("\",\"mail_configured\":%s,", mail_is_configured() ? "true" : "false");
     if (twai_state) {
         printf("\"twai\":\"%s\",\"tec\":%lu,\"rec\":%lu}\r\n",
                twai_state, (unsigned long)tec, (unsigned long)rec);
@@ -179,6 +191,23 @@ static void cli_exec(const char *cmd, const char *arg)
         cmd_info();
     } else if (!strcmp(cmd, "status")) {
         cmd_status();
+    } else if (!strcmp(cmd, "mail")) {
+        char recipient[MAIL_ADDRESS_MAX];
+        mail_get_recipient(recipient, sizeof(recipient));
+        printf("发件邮箱: %s\r\n收件邮箱: %s\r\n授权配置: %s\r\n", MAIL_SENDER, recipient,
+               mail_is_configured() ? "已配置（发信时验证并自动续期）" : "未配置，请使用 mailauth 导入");
+    } else if (!strcmp(cmd, "mailcheck")) {
+        esp_err_t ret = mail_check_start();
+        if (ret == ESP_OK) printf("正在验证设备邮箱连接…\r\n");
+        else printf("邮箱验证未启动：%s（请检查 STA 联网、授权配置或正在发送的邮件）\r\n", esp_err_to_name(ret));
+    } else if (!strcmp(cmd, "mailto")) {
+        esp_err_t ret = mail_set_recipient(arg);
+        if (ret == ESP_OK) printf("收件邮箱已保存为 %s\r\n", arg);
+        else printf("收件邮箱设置失败：%s\r\n", esp_err_to_name(ret));
+    } else if (!strcmp(cmd, "mailauth")) {
+        esp_err_t ret = mail_import_auth(arg);
+        if (ret == ESP_OK) printf("MAILAUTH OK：邮箱授权已保存\r\n");
+        else printf("MAILAUTH ERROR：%s（需包含 email/client_id/refresh_token，发送期间不能更新）\r\n", esp_err_to_name(ret));
     } else if (!strcmp(cmd, "mode")) {
         wifi_cfg_mode_t target;
         if (!strcmp(arg, "ap")) target = WIFI_CFG_MODE_AP;
@@ -250,6 +279,10 @@ static void cli_exec(const char *cmd, const char *arg)
 
 static void cli_handle_line(cli_port_t *p)
 {
+    if (p->overflow) {
+        printf("命令过长，已拒绝执行\r\n");
+        goto done;
+    }
     p->buf[p->len] = '\0';
 
     char *cmd = p->buf;
@@ -266,7 +299,9 @@ static void cli_handle_line(cli_port_t *p)
     cli_exec(cmd, arg);
 
 done:
+    memset(p->buf, 0, sizeof(p->buf));
     p->len = 0;
+    p->overflow = false;
     p->last_cr = false;
 }
 
@@ -295,8 +330,13 @@ static void cli_feed(cli_port_t *p, char c)
 
     if (p->len < CLI_LINE_MAX - 1) {
         p->buf[p->len++] = c;
-        write(p->fd, &c, 1);             // 回显
+        /* Preserve ordinary command echo; mask OAuth secrets as they arrive. */
+        size_t start = 0;
+        while (start < p->len && p->buf[start] == ' ') start++;
+        if (p->len > start + 9 && !strncmp(p->buf + start, "mailauth ", 9)) write(p->fd, "*", 1);
+        else write(p->fd, &c, 1);
     } else {
+        p->overflow = true;
         write(p->fd, "\a", 1);           // 行满
     }
 }
@@ -305,15 +345,23 @@ static void cli_task(void *arg)
 {
     (void)arg;
 
-    cli_port_t uart_port = { .fd = 0 };
-    cli_port_t usj_port  = { .fd = -1 };
+    cli_port_t *uart_port = calloc(1, sizeof(*uart_port));
+    cli_port_t *usj_port = calloc(1, sizeof(*usj_port));
+    if (!uart_port || !usj_port) {
+        free(uart_port); free(usj_port);
+        ESP_LOGE(TAG, "CLI buffer allocation failed");
+        vTaskDelete(NULL);
+        return;
+    }
+    uart_port->fd = 0;
+    usj_port->fd = -1;
 #if CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG
     // 仅用于回显输出；输入不走该 fd——VFS 的非阻塞读在未装 USJ 驱动时
     // 只查驱动环形缓冲（恒为 0），从不排空硬件 FIFO（idf.py: usb_serial_jtag.c
     // get_read_bytes_available），会导致主机写入被 NAK。输入直接轮询 ll FIFO。
-    usj_port.fd = open("/dev/secondary", O_RDWR | O_NONBLOCK);
-    if (usj_port.fd < 0) {
-        ESP_LOGW(TAG, "USB-Serial/JTAG echo fd unavailable (%d)", usj_port.fd);
+    usj_port->fd = open("/dev/secondary", O_RDWR | O_NONBLOCK);
+    if (usj_port->fd < 0) {
+        ESP_LOGW(TAG, "USB-Serial/JTAG echo fd unavailable (%d)", usj_port->fd);
     }
 #endif
 
@@ -323,10 +371,10 @@ static void cli_task(void *arg)
     uint8_t tmp[64];
     while (1) {
 #if CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG
-        if (usj_port.fd >= 0) {
+        if (usj_port->fd >= 0) {
             uint32_t n = usb_serial_jtag_ll_read_rxfifo(tmp, sizeof(tmp));
             for (uint32_t i = 0; i < n; i++) {
-                cli_feed(&usj_port, (char)tmp[i]);
+                cli_feed(usj_port, (char)tmp[i]);
             }
         }
 #endif
@@ -337,7 +385,7 @@ static void cli_task(void *arg)
         if (n > 0) {
             uart_ll_read_rxfifo(uart0, tmp, n);
             for (uint32_t i = 0; i < n; i++) {
-                cli_feed(&uart_port, (char)tmp[i]);
+                cli_feed(uart_port, (char)tmp[i]);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(CLI_POLL_MS));

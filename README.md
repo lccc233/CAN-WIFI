@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO15，RX=GPIO16
+- **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO5，RX=GPIO4
 - **Web 实时界面**（HTTP Server，页面 200ms 轮询刷新）：
   - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **自定义曲线**（任意 ID 自定义信号）
   - 按 ID 分组展示最新消息（**按 ID 从小到大排序**），列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
@@ -23,6 +23,11 @@
   - 限制：浏览器只积累**打开页面之后**的数据（200ms 轮询快照去重）；长期历史用导出 CSV 分析
 - **浏览器授时**：打开页面自动 `POST /api/time` 校准，原始帧备份 CSV（`/api/export`）的 `time` 列为真实时间
   （未授时时回退为开机相对时间 `boot + HH:MM:SS.mmm`）
+- **CSV 邮件附件**：自定义曲线页“导出记录CSV”后面的信封按钮，发送点击时的已记录信号宽表 CSV；
+  使用与下载共用的 CSV 生成函数。发送时信封黄色慢闪，邮件服务明确接受后绿色，失败红色并提示原因。
+  ESP32-S3 独立通过 HTTPS 调用 QQ Agent 邮箱接口，自动刷新 OAuth 凭据，运行时不需要电脑代发。
+  发件地址固定 `espdata@agent.qq.com`，默认收件地址 `lichen1435374410@163.com`，串口 `mailto` 可修改并保存。
+  附件上限 20MB（同时遵守邮箱账户返回的更低限制），分块 Base64 + SHA-1 流式发送，避免整份附件占用 PSRAM。
 - **设备端原始帧备份导出**（无页面 UI，仅 API 备用）：
   - `POST /api/rec/start` / `POST /api/rec/stop` 可用 curl 触发 PSRAM 录制
     （只录 0x18FF0182/0x18FF0282 两 ID，约 37 万条 ≈ 52 分钟，录满自动停止）
@@ -49,22 +54,32 @@
 - **接线**：
   | 功能 | GPIO |
   |------|------|
-  | CAN TX | GPIO15 |
-  | CAN RX | GPIO16 |
+  | CAN TX | GPIO5 |
+  | CAN RX | GPIO4 |
   | WS2812 DIN | GPIO48 |
 - **供电/烧录**：USB 线接板载 USB-Serial/JTAG 口
 
 ## 构建与烧录
 
+无需安装开发环境的 Windows 64位独立烧录包：[GitHub Release 下载](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.07-mail)。
+附件为 `CAN-WIFI_20261007_MAIL_Win64.zip`；本地打包输出在 `release/` 目录。
+解压后双击 `CAN-WIFI-Flasher.exe`，选择串口即可离线烧录；EXE 内置工具与固件，升级保留配置。
+也支持 [乐鑫官方网页烧录](https://espressif.github.io/esptool-js/)，选择包内三个 BIN，地址为 `0x0`、`0x8000`、`0x10000`，
+参数 DIO / 80MHz / 16MB，保留配置时不要点击 Erase Flash。
+完整说明见 [独立 EXE 与官方网页版烧录方法](docs/offline-flashing.md)。
+
 ```bash
-idf.py set-target esp32s3
-idf.py -p <COM口> build flash monitor
+idf.py -B build-mail -D SDKCONFIG=build-mail/sdkconfig -p <COM口> build flash monitor
 ```
 
 PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz / 16MB），
 不要手动改 `sdkconfig`——**手工插入的配置块会被构建系统重写丢弃**（见 HANDOFF）。
 烧录走 **UART 模式**：USB 口本身暴露 COM 口，端口号以设备管理器/`idf.py` 枚举为准
 （历史配置为 COM6，拔插可能变化），用 esptool 直接烧录，无需 OpenOCD。
+
+邮件版使用 `partitions.csv` 的 3MB 应用分区（起始仍为 `0x10000`），NVS 地址/大小不变。
+使用独立 `build-mail/sdkconfig` 从 `sdkconfig.defaults` 生成配置，以免旧 `sdkconfig` 的 1MB 分区覆盖新默认值；
+不要沿用移动项目前的旧 `build/` 缓存。首次升级需要一起烧录应用与分区表，无需擦除 NVS。
 
 > **改了目录名或移动过项目？** 先删掉 `build/` 再构建。CMakeCache 会写死项目绝对路径，
 > 沿用旧 `build/` 会报 `CMAKE_C_COMPILER not found`。
@@ -97,10 +112,12 @@ PSRAM 通过 `sdkconfig.defaults` 启用（OCT 八线 / 80MHz / Flash DIO 80MHz 
 `idf.py monitor`（或任意串口终端，115200）连上后**直接敲命令回车**即可，UART0（USB转UART口）
 与板载 USB-Serial/JTAG 口都支持输入；`info` 可随时查看设备当前状态。
 
+完整命令、响应格式、`status` 字段和上位机示例见独立文档：[串口协议](docs/serial-protocol.md)。
+
 ```
 help                命令列表
 info                当前状态：模式/SSID/信号/IP/掩码/网关/MAC/CAN状态/运行时间
-status              同上信息，单行 JSON 输出（供 PC 上位机解析）
+status              WiFi/CAN/邮箱状态，单行 JSON 输出（供 PC 上位机解析）
 mode ap | mode sta  切换热点/STA 模式（保存到 NVS，设备自动重启生效）
 ssid <名称>         设置 STA 连接的 WiFi 名称（保存并立即重连，无需重启）
 pass <密码>         设置 STA 密码（8~63 字符，保存并立即重连）
@@ -108,9 +125,40 @@ ip                  查看当前 IP 配置
 ip auto             自动绑定当前网段的 xxx.xxx.xxx.250（默认）
 ip <x.x.x.x>        设置固定 IP（如 ip 192.168.1.250）
 reboot              重启设备
+mail                查看发件/收件邮箱和授权配置状态（不显示凭据）
+mailto <邮箱地址>   修改收件邮箱并保存到 NVS
+mailauth <JSON>     导入 OAuth 授权，输入凭据以星号回显
+mailcheck           验证设备 HTTPS、邮箱身份和自动续期（不发信）
 ```
 
 所有配置保存于 NVS（命名空间 `wificfg`），断电不丢、重烧固件不丢（擦除 NVS 后回到默认值）。
+
+邮件配置使用独立 NVS 命名空间 `mailcfg`，同样断电保留。
+
+### 首次授权与发送 CSV 附件
+
+1. 按 [QQ Agent 官方配置说明](https://agent.qq.com/doc/cli-setup.md) 安装最新官方 CLI，
+   运行 `agently-cli auth login`，在浏览器完成 `espdata@agent.qq.com` 的 OAuth 授权；用 `agently-cli +me` 核对邮箱。
+2. 烧录邮件版固件后，用 Windows 上的 Python 和 pyserial 导入授权（串口不要被 monitor/上位机占用）：
+
+   ```powershell
+   python tools/provision-mail.py --port COM8
+   ```
+
+   该工具读取当前 CLI workspace 的 Windows DPAPI 凭据，仅导入 `email/client_id/refresh_token`，
+   不输出凭据、不把它们写进源代码。也支持 `--cli <官方CLI路径>`，或 `--auth-file <本机DPAPI加密配置文件>`。
+   其他系统可通过串口 `mailauth {"email":"espdata@agent.qq.com","client_id":"<OAuth client ID>","refresh_token":"<refresh token>"}` 导入。
+   不要提交授权文件或把真实凭据发到聊天中。授权被撤销/续期失败时，重新授权并导入。
+3. 设备 STA 模式连接能上网的路由器/手机热点，打开设备页面以校准 UTC 系统时间（用于 HTTPS 证书校验）。
+   可在串口执行 `mailcheck` 验证设备连接，不会发送测试邮件。
+4. 自定义曲线页 Record → Stop → 点击 CSV 导出旁的信封；无需先下载到电脑。
+   录制中也可发送点击时的快照，后续采样不会改变正在上传的附件。
+5. 修改收件地址：`mailto someone@example.com`；用 `mail` 查看保存结果。
+
+绿色表示服务响应 `queued:true`，已接受投递，不等同于收件人已收到。
+网络中断时若显示“发送结果未确认”，先检查收件箱/发件箱再重试，避免重复投递。
+邮件模块依据官方 CLI **1.0.18** 的请求预览格式接入；目前没有官方 ESP32 SDK，若 QQ 调整接口需要同步更新。
+OAuth 授权仅用于首次配置；之后由设备保存轮换的 refresh token。不要同时用复制的授权在其他客户端反复续期。
 
 不想敲命令？用 **PC 上位机**（同级目录 `../CAN-WIFI-Host/`）：图形界面切换模式、
 改 SSID/密码/IP、实时状态面板 + 串口终端。`dist/CANMonHost.exe` 双击即用（新电脑
@@ -126,6 +174,9 @@ reboot              重启设备
 6. 断电重启：以上配置均保留
 
 ### 信号定义（来自协议表）
+
+四路曲线可用 PCAN-USB 正弦测试脚本验证：`python tools/can-sine-test.py`（持续发送，Ctrl+C 停止）。
+接线、依赖安装、波形参数和完整运行示例见 [正弦 CAN 测试说明](docs/can-sine-test.md)。
 
 两个报文（扩展帧，8 字节，16 位原始值字节序默认**小端**）：
 
@@ -165,6 +216,7 @@ reboot              重启设备
 | `GET /api/signals` | 自定义曲线信号配置：返回存储的 JSON 数组（未存过返回 `[]`） |
 | `POST /api/signals` | 保存信号配置到设备 NVS（body 为配置数组，逐条校验：id 为 0x 开头十六进制 ≤16 字符、name ≤64 字符、最多 64 条，不合法返回 400；上限 ~3500 字节，响应 `{"ok":true,"n":N}`）；页面每次改动自动保存 |
 | `GET /api/export` | CSV 流式下载全部录制数据（物理值列，time 列已授时为真实时间） |
+| `POST /api/mail/send` | body 为前端记录 CSV，`X-CSV-Filename` 为 ASCII `.csv` 文件名；异步任务流式发信，服务接受后返回 `{ok:true,message}`，并发发送返回 409；失败保留浏览器记录 |
 
 ## 目录结构
 
@@ -173,6 +225,7 @@ main/
 ├── main.c             # 初始化：NVS → WiFi(AP/STA) → CAN → 记录器 → Web → LED → 串口配置台
 ├── can.c / can.h      # TWAI 驱动、RX 任务、每 ID 频率统计
 ├── can_logger.c/.h    # PSRAM 录制缓冲（双 ID 过滤，录满即停）
+├── mail_sender.c/.h   # QQ Agent OAuth 续期、邮箱身份验证、CSV 邮件附件流式发送
 ├── signal_decode.c/.h # 0x18FF0182/0x18FF0282 信号解码（/api/export CSV 物理值列用）
 ├── wifi.c / wifi.h    # WiFi AP/STA 双模式 + NVS 配置 + IP 自动绑定 .250 + mDNS + 断线重连
 ├── serial_cli.c/.h    # 串口配置台（mode/ssid/pass/ip/info 命令，UART0 与 USB 串口均可输入）

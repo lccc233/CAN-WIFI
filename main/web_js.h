@@ -378,6 +378,17 @@ var curveRecOn = false;
 var curveRecStartT = 0;
 var curveRecCount = 0;
 var CURVE_REC_MAX = 200000;   // 每信号点数上限（约 1 小时 @50Hz）
+var csvMailBusy = false;
+var csvMailGeneration = 0;
+function csvMailState(state, message) {
+  var btn = document.getElementById('csvMailBtn');
+  btn.classList.remove('sending', 'success', 'failed');
+  if (state) btn.classList.add(state);
+  btn.disabled = csvMailBusy;
+  btn.setAttribute('aria-busy', csvMailBusy ? 'true' : 'false');
+  btn.title = message || '发送记录 CSV 到邮箱';
+  btn.setAttribute('aria-label', btn.title);
+}
 
 function sigEnabledById(id) {
   var out = [];
@@ -426,6 +437,8 @@ function curveRecToggle() {
     curveRecStartT = Date.now();
     curveRecData = {};
     curveRecCount = 0;
+    csvMailGeneration++;
+    if (!csvMailBusy) csvMailState('');
     toast('开始记录曲线数据（已启用信号）');
   } else {
     curveRecOn = false;
@@ -433,7 +446,7 @@ function curveRecToggle() {
   }
   curveRecUpdateUI();
 }
-function curveRecExportCsv() {
+function curveRecBuildCsv() {
   // 汇总所有信号采样点，按时间归并为宽表：no,time_rel_ms,<信号列>...
   var sigs = [];
   for (var i = 0; i < configs.length; i++) {
@@ -469,13 +482,44 @@ function curveRecExportCsv() {
     }
     lines.push(row);
   }
-  var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  return { blob: new Blob([lines.join('\n')], { type: 'text/csv; charset=utf-8' }),
+           filename: 'can_signals_' + Date.now() + '.csv', rows: tU.length, signals: sigs.length };
+}
+function curveRecExportCsv() {
+  var csv = curveRecBuildCsv();
+  if (!csv) return;
   var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'can_signals_' + Date.now() + '.csv';
+  a.href = URL.createObjectURL(csv.blob);
+  a.download = csv.filename;
   a.click();
   URL.revokeObjectURL(a.href);
-  toast('已导出 ' + tU.length + ' 行 × ' + sigs.length + ' 信号');
+  toast('已导出 ' + csv.rows + ' 行 × ' + csv.signals + ' 信号');
+}
+async function curveRecSendCsv() {
+  if (csvMailBusy) return;
+  var csv = curveRecBuildCsv();
+  if (!csv) return;
+  if (csv.blob.size > 20 * 1024 * 1024) { toast('CSV 超过 20MB，请缩短记录后发送'); return; }
+  var generation = csvMailGeneration;
+  csvMailBusy = true;
+  csvMailState('sending', '正在发送记录 CSV…');
+  try {
+    var response = await fetch('/api/mail/send', {
+      method: 'POST', headers: { 'Content-Type': 'text/csv; charset=utf-8', 'X-CSV-Filename': csv.filename },
+      body: csv.blob
+    });
+    var result = await response.json();
+    if (!response.ok || result.ok !== true) throw new Error(result.message || '发送失败');
+    csvMailBusy = false;
+    csvMailState(generation === csvMailGeneration ? 'success' : '', result.message);
+    toast(result.message || '邮件服务已接受发送');
+  } catch (e) {
+    csvMailBusy = false;
+    var message = e.message || '发送结果未确认，请检查邮箱后再决定是否重试';
+    if (e instanceof TypeError) message = '连接中断，发送结果未确认，请检查邮箱后再决定是否重试';
+    csvMailState('failed', message);
+    toast(message);
+  }
 }
 
 // ---- 配置导出（迷你 DBC，JSON 备份/分享） ----
@@ -764,6 +808,7 @@ document.getElementById('pauseBtn').addEventListener('click', function() {
 document.getElementById('winSel').addEventListener('change', renderCharts);
 document.getElementById('curveRecBtn').addEventListener('click', curveRecToggle);
 document.getElementById('csvExportBtn').addEventListener('click', curveRecExportCsv);
+document.getElementById('csvMailBtn').addEventListener('click', curveRecSendCsv);
 document.getElementById('cfgExportBtn').addEventListener('click', exportCfg);
 document.getElementById('cfgImportBtn').addEventListener('click', function() {
   document.getElementById('cfgImportFile').click();

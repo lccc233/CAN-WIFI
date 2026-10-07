@@ -12,6 +12,7 @@
 #include "web_server.h"
 #include "led.h"
 #include "serial_cli.h"
+#include "mail_sender.h"
 
 static const char *TAG = "main";
 
@@ -36,6 +37,8 @@ void app_main(void)
 
     // PSRAM 历史数据记录器（失败仅禁用录制，不影响监控）
     ESP_ERROR_CHECK(can_log_init());
+
+    ESP_ERROR_CHECK(mail_sender_init());
 
     // HTTP 服务器
     ESP_ERROR_CHECK(web_server_start());

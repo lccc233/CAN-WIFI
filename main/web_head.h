@@ -161,6 +161,15 @@
   .empty { color: #888; font-size: 0.78rem; padding: 14px 8px; text-align: center; }
   #curveRecBtn.recording { background: #ea4335; color: #fff; border-color: #ea4335;
                            animation: recblink 1.2s infinite; }
+  .csv-actions { display: inline-flex; align-items: center; gap: 8px; }
+  .mail-btn { display: inline-flex; align-items: center; justify-content: center; padding: 5px 9px; }
+  .mail-btn svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
+  .mail-btn.sending { color: #a66a00; border-color: #e4b400; background: #fff7d6; animation: mailblink 2s ease-in-out infinite; }
+  .mail-btn.success { color: #188038; border-color: #188038; background: #e6f4ea; }
+  .mail-btn.failed { color: #c5221f; border-color: #c5221f; background: #fce8e6; }
+  .mail-btn.sending:disabled { opacity: 1; }
+  @keyframes mailblink { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .mail-btn.sending { animation: none; } }
 
   /* 添加/编辑信号模态框 */
   .modal-mask {

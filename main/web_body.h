@@ -79,7 +79,10 @@
       <button class="btn" id="pauseBtn">暂停</button>
       <button class="btn" id="curveRecBtn">&#9679; Record</button>
       <span class="msg-count" id="curveRecStatus"></span>
-      <button class="btn" id="csvExportBtn">导出记录CSV</button>
+      <span class="csv-actions">
+        <button class="btn" id="csvExportBtn">导出记录CSV</button>
+        <button class="btn mail-btn" id="csvMailBtn" title="发送记录 CSV 到邮箱" aria-label="发送记录 CSV 到邮箱"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></svg></button>
+      </span>
       <button class="btn" id="cfgExportBtn">导出配置</button>
       <button class="btn" id="cfgImportBtn">导入配置</button>
       <input type="file" id="cfgImportFile" accept=".json,application/json" class="hidden">

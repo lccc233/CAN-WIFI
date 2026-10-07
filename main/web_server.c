@@ -13,6 +13,7 @@
 #include "signal_decode.h"
 #include "time_sync.h"
 #include "web_page.h"
+#include "mail_sender.h"
 #include "web_server.h"
 
 static const char *TAG = "web";
@@ -604,6 +605,7 @@ esp_err_t web_server_start(void)
     httpd_uri_t time = { .uri = "/api/time", .method = HTTP_POST, .handler = api_time_handler };
     httpd_uri_t signals_get = { .uri = "/api/signals", .method = HTTP_GET, .handler = api_signals_handler };
     httpd_uri_t signals_post = { .uri = "/api/signals", .method = HTTP_POST, .handler = api_signals_handler };
+    httpd_uri_t mail_send = { .uri = "/api/mail/send", .method = HTTP_POST, .handler = mail_send_handler };
 
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &messages);
@@ -616,6 +618,7 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &time);
     httpd_register_uri_handler(s_server, &signals_get);
     httpd_register_uri_handler(s_server, &signals_post);
+    httpd_register_uri_handler(s_server, &mail_send);
 
     ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;

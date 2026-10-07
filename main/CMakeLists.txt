@@ -1,3 +1,3 @@
-idf_component_register(SRCS "time_sync.c" "signal_decode.c" "can_logger.c" "main.c" "wifi.c" "can.c" "web_server.c" "led.c" "serial_cli.c"
+idf_component_register(SRCS "mail_sender.c" "time_sync.c" "signal_decode.c" "can_logger.c" "main.c" "wifi.c" "can.c" "web_server.c" "led.c" "serial_cli.c"
                        INCLUDE_DIRS "."
-                       REQUIRES esp_wifi esp_http_server nvs_flash esp_netif esp_event driver mdns led_strip esp_psram json esp_timer)
+                       REQUIRES esp_http_client mbedtls esp_wifi esp_http_server nvs_flash esp_netif esp_event driver mdns led_strip esp_psram json esp_timer)

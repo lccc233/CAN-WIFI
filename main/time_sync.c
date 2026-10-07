@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "time_sync.h"
@@ -27,6 +28,9 @@ static uint32_t boot_ms_now(void)
 
 void time_sync_set(int64_t epoch_ms, int tz_min)
 {
+    /* HTTPS certificate validity checks need the real system UTC clock. */
+    struct timeval tv = { .tv_sec = epoch_ms / 1000, .tv_usec = (epoch_ms % 1000) * 1000 };
+    settimeofday(&tv, NULL);
     ts_init();
     xSemaphoreTake(s_ts.mutex, portMAX_DELAY);
     s_ts.epoch_base = epoch_ms;

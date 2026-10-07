@@ -1,7 +1,7 @@
 # 交接文档：ESP32-S3 CAN Bus Monitor
 
 ## 项目信息
-- **路径**: `C:\Users\Administrator\.zcode\workspace\default\CAN-WIFI`
+- **路径**: `C:\Users\Administrator\Desktop\CAN-WIFI`
 - **主文件**: `main/main.c`, `main/can.c`, `main/can_logger.c`, `main/signal_decode.c`, `main/wifi.c`, `main/serial_cli.c`, `main/web_server.c`, `main/web_page.h`, `main/led.c`
 - **ESP-IDF 版本**: 5.3.5，路径 `C:\esp\v5.3.5\esp-idf`（EIM 管理：激活脚本
   `C:\Espressif\tools\Microsoft.v5.3.5.PowerShell_profile.ps1`，工具链/venv 在 `C:\Espressif\tools`）
@@ -43,12 +43,13 @@ SIT1042 CAN 收发器模块的 **TX/RX 默认电平为 5V**，而 ESP32-S3 引�
 3. **外部物理引脚 TX/RX 分离测试** — 之前失败（电平问题，已解决）
 
 ### 已验证的 GPIO 组合
-- GPIO15(TX) + GPIO16(RX) — 当前使用（VIO 接 3.3V 后正常；早期验证用 GPIO5+GPIO4）
+- GPIO15(TX) + GPIO16(RX) — 曾验证正常（VIO 接 3.3V 后正常；早期验证用 GPIO5+GPIO4）
+- GPIO5(TX) + GPIO4(RX) — 2026-10-07 按用户要求改为当前接线
 
 ## 当前代码状态
 - 多文件架构：`main.c`, `can.c`, `can_logger.c`, `signal_decode.c`, `wifi.c`, `serial_cli.c`,
   `web_server.c`, `web_page.h`, `led.c`
-- TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO15，RX=GPIO16
+- TWAI 配置：`TWAI_MODE_NORMAL`，250kbps，TX=GPIO5，RX=GPIO4
 - WiFi 双模式（2026-09-24 起配置存 NVS，命名空间 `wificfg`，串口命令可改，见第六轮节）：
   STA 默认连 `ABCDEF`/`A12345678`，IP 规则默认**自动绑定同网段 .250**（DHCP 拿到 IP 后
   在 GOT_IP 事件里改绑，网段变了自适应）；AP 模式热点 `CAN-Monitor-XXXX`（密码 12345678，
@@ -363,7 +364,74 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 - **VOFA+ 占口注意**：本机 VOFA+ 等串口工具占 COM8 时，烧录与上位机连接都会
   PermissionError(13)——先关掉它
 
+## CSV 附件邮件（2026-10-07）
+
+- 曲线页“导出记录CSV”后加入 SVG 信封，窄屏下与导出按钮一起换行。
+  与下载共享 `curveRecBuildCsv`，发送的是网页 Record 已记录的信号宽表，非设备端双 ID PSRAM 备份。
+- 黄色 2s 慢闪 + 禁用重复点击；服务明确返回 `queued:true` 后绿色；失败红色并显示原因。
+  新录制开始会清除旧发送成功状态，发送过程中的旧附件不会随采样改变。
+- `main/mail_sender.c/.h`：ESP32 独立 HTTPS → QQ Agent API；每次发信先刷新 OAuth 并保存轮换 refresh token，
+  再验证 `/v1/me` 中 `espdata@agent.qq.com` 的 alias。分块从浏览器 POST 读取 CSV，流式 Base64 + SHA-1 写入 JSON 附件。
+  不分配整份 CSV，不占用 PSRAM 录制缓冲。单附件最多 20MB；同时检查账户单附件限制。
+- 串口：`mail`、`mailto <地址>`、`mailauth <JSON>`、`mailcheck`（只检查网络/身份/续期，不发信）。
+  默认收件地址 `lichen1435374410@163.com`。配置存 `mailcfg` NVS；授权输入星号回显，串口缓冲在堆上，超长命令拒绝执行。
+- `tools/provision-mail.py`：首次从官方 Windows CLI 的当前 workspace/DPAPI 存储导入指定邮箱的授权，
+  不输出凭据。依赖 pyserial。CLI 请求预览和本机存储格式按 **1.0.18** 核对，服务/CLI 改版可能需要适配。
+- TLS 使用 CA bundle、主机名与证书有效期校验；网页授时同时设置系统 UTC 时间。
+  AP 模式不能发送；STA 需可访问互联网。
+- 新应用约 **1.05MiB**，原 1MB 分区容纳不了。`partitions.csv` 改为 3MB factory，仍在 `0x10000`，
+  NVS `0x9000/0x6000` 保持兼容。构建/烧录使用：
+  `idf.py -B build-mail -D SDKCONFIG=build-mail/sdkconfig -p COM8 build flash`。
+  旧 `build/` 缓存来自已移动路径，不要复用；首次升级须同时刷分区表。配置由 defaults 生成，不手改 sdkconfig。
+- 验证：全量构建及 COM8 烧录通过；授权导入设备成功，重烧后仍保留；实机 `mailcheck` 证书/身份/续期成功；
+  STA 当前 `192.168.101.250`，CAN RUNNING。前端 `node tools/test-mail-ui.mjs` 覆盖 CSV 与下载一致（Unicode/公式防护）、
+  空记录拦截、发送/成功/失败状态、重复点击、断网歧义、新录制状态重置；窄屏实机页面已检查。
+  **尚未验证真实附件投递**：当前无 CAN 报文；需要接入 CAN 后 Record/Stop/点击信封并核对收件箱。
+
+## 串口邮箱状态与协议文档（2026-10-07）
+
+- `status` 单行 JSON 新增 `mail_from`、`mail_to`、`mail_configured`，保留所有原有字段。
+  授权配置布尔值只表示已保存非空凭据，不表示联网或授权有效；验证使用 `mailcheck`，状态查询不触发联网。
+- 独立文档 `docs/serial-protocol.md` 覆盖双串口连接、UTF-8/行结束符/长度限制/回显、全部命令与响应、
+  参数与 NVS 持久化、所有状态字段和 pyserial 解析示例；README 增加入口。
+  文档明确当前 `can_ring` 因零条快照查询固定为 0，接收报文应看 `can_total`。
+- 验证：构建及 COM8 烧录成功；实机状态 JSON 原有字段与三个邮箱字段齐全，授权配置为 true；
+  临时修改收件地址后状态立即更新，随后恢复 `lichen1435374410@163.com`。
+  CAN RUNNING，TEC=0、REC=0。此次验证未发送邮件。
+
+## PCAN 四路正弦曲线测试（2026-10-07）
+
+- 用户明确要求调用子代理；子代理完成 `tools/can-sine-test.py`，根代理复核及实机验证。
+  默认 PCAN-USB / PCAN_USBBUS1 / 250kbps，DLC8 扩展帧；电机 10ms、母线 50ms，小端编码匹配网页四路预置。
+  转矩±1000Nm、转速±6000rpm、电流200±100A、电压400±40V，周期分别6/8/10/12s。
+- 默认持续发送、Ctrl+C 清理；可设置时长、每路幅度/偏置/周期/相位、报文间隔、字节序。
+  `--dry-run` 无硬件和第三方依赖。参数有限值与完整物理域校验，不裁剪越界波形。
+  Windows 使用高分辨率等待计时器与 perf_counter；延迟时跳过时隙，不突发补发。
+  PCAN 每秒与结束前检查总线状态；发送错误非零退出并释放总线和计时器。
+- 依赖 `tools/requirements-can-test.txt`，接线/运行/参数说明 `docs/can-sine-test.md`；README 提供入口。
+  正弦测试使用外接 PCAN 向 ESP RX 发送，不依赖 ESP NORMAL 模式自身发送回收。
+- 验证：独立协议解码核对2401个时间点，大小端/参数拒绝/错误退出/Ctrl+C清理和虚拟总线通过；
+  PCAN 实机13秒发送1300+260帧，设备全部1560帧接收，四路范围与默认波形一致，跳过0/0。
+  验证依赖临时装在忽略的 `release/can-test-deps`，未安装到系统Python；实际运行先按文档安装依赖。
+  短时测试已停止并释放PCAN；未修改设备配置、清空数据或发送邮件。
+
+## Windows 独立烧录发布包（2026-10-07）
+
+- `tools/offline-flasher.py`：Tk串口选择/速度选择/后台烧录/日志与错误提示，固定ESP32-S3 DIO80MHz16MB，
+  内嵌固件SHA-256检查，esptool4.12.0写入后校验。仅写0x0、0x8000、0x10000三段，NVS不覆盖。
+  窗口程序支持 `--verify-package` / `--list-ports` / `--flash COM8` / `--report <UTF8文件>` 诊断。
+- `tools/package-offline-firmware.py`：PyInstaller单文件Windows64位EXE，打入esptool资源、Python/Tk运行时与当前固件；
+  发布为 `release/CAN-WIFI_20261007_MAIL_Win64.zip`，含原始三段BIN、清单/校验和、说明、串口/测试文档、辅助脚本及第三方源码/许可。
+  打包读取固定文件清单，不读取OAuth注册表凭据或设备NVS。烧录器/打包器按GPL-2.0-or-later提供。
+- 独立烧录无需Python/ESP-IDF/Node或联网；Windows仍须识别USB串口。额外的首次邮箱授权及PCAN测试与烧录流程独立。
+  新板需重新配置授权，本包没有内置refresh token；兼容旧设备升级保留授权。
+- 验证：复制单独EXE到含中文/空格路径，删除Python/IDF环境变量，PATH仅系统目录，
+  内嵌校验、GUI初始化、串口枚举、无效端口拒绝通过；独立EXE COM8实际烧录三段校验通过。
+  重启WiFi恢复，收件地址/授权配置/四曲线定义保留，CAN RUNNING TEC0 REC0。
+  尚未在另一台干净Windows电脑验证USB驱动识别。说明见 `docs/offline-flashing.md`。
+
 ## 关键代码位置
+
 | 文件 | 说明 |
 |------|------|
 | `main/can.c` | TWAI 驱动初始化、RX 任务（DLC 钳位 + 记录写入）、告警处理、发送 API（ID 范围校验） |
