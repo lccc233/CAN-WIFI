@@ -4,13 +4,32 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
 #include "driver/twai.h"
 #include "can.h"
 #include "can_logger.h"
 
 static const char *TAG = "can";
 
-static can_rx_ring_t g_ring;
+typedef struct {
+    can_msg_entry_t entries[CAN_MONITOR_PER_ID];
+    uint32_t seq[CAN_MONITOR_PER_ID];
+    uint8_t head;   // 下次写入的位置（10 不是 2 的幂，使用取模）
+    uint8_t count;
+} can_monitor_id_t;
+
+static struct {
+    can_monitor_id_t ids[CAN_MONITOR_MAX_IDS];
+    uint32_t id_count;
+    uint32_t head;  // 启动以来的接收序号，清空监控后仍递增
+    uint32_t count;
+    SemaphoreHandle_t mutex;
+} g_ring;
+static struct {
+    can_msg_entry_t *entries;
+    uint64_t head;
+    uint32_t count;
+} s_live;
 static SemaphoreHandle_t g_send_mutex;
 static uint32_t s_boot_id;
 
@@ -33,13 +52,14 @@ static void can_rx_task(void *arg);
 static void can_alert_task(void *arg);
 static void twai_print_status(void);
 
-// ---- 环形缓冲操作 ----
+// ---- 每 ID 监控历史 ----
 
 void can_clear_ring(void)
 {
     if (!g_ring.mutex || !g_freq_mutex) return;
     xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
-    // head 是启动以来的帧序号。只清窗口计数，避免清空后前端误判为旧帧。
+    // 保留启动以来的帧序号，避免清空后前端误判为旧帧。
+    g_ring.id_count = 0;
     g_ring.count = 0;
     xSemaphoreGive(g_ring.mutex);
 
@@ -69,16 +89,115 @@ void can_get_snapshot_seq(can_msg_entry_t *out, uint32_t *seq,
     *out_total = 0;
     if (!g_ring.mutex || (!out && max_entries)) return;
     xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
-    uint32_t total = g_ring.count;
-    uint32_t available = (total < CAN_RX_RING_SIZE) ? total : CAN_RX_RING_SIZE;
+    uint8_t remaining[CAN_MONITOR_MAX_IDS];
+    uint32_t available = 0;
+    for (uint32_t i = 0; i < g_ring.id_count; i++) {
+        remaining[i] = g_ring.ids[i].count;
+        available += remaining[i];
+    }
     uint32_t to_copy = (available < max_entries) ? available : max_entries;
-    uint32_t start = (g_ring.head - to_copy) & (CAN_RX_RING_SIZE - 1);
-    for (uint32_t i = 0; i < to_copy; i++) {
-        out[i] = g_ring.entries[(start + i) & (CAN_RX_RING_SIZE - 1)];
-        if (seq) seq[i] = g_ring.head - to_copy + i;
+    // 每个 ID 的小环从新到旧归并，倒序填入输出；相同时间戳仍按 seq 排序。
+    for (uint32_t n = to_copy; n > 0; n--) {
+        uint32_t selected = 0, selected_pos = 0, newest_age = UINT32_MAX;
+        for (uint32_t i = 0; i < g_ring.id_count; i++) {
+            if (!remaining[i]) continue;
+            can_monitor_id_t *bucket = &g_ring.ids[i];
+            uint32_t pos = (bucket->head + CAN_MONITOR_PER_ID
+                            - bucket->count + remaining[i] - 1) % CAN_MONITOR_PER_ID;
+            uint32_t age = g_ring.head - bucket->seq[pos];
+            if (age < newest_age) {
+                selected = i;
+                selected_pos = pos;
+                newest_age = age;
+            }
+        }
+        out[n - 1] = g_ring.ids[selected].entries[selected_pos];
+        if (seq) seq[n - 1] = g_ring.ids[selected].seq[selected_pos];
+        remaining[selected]--;
     }
     *out_count = to_copy;
-    *out_total = total;
+    *out_total = g_ring.count;
+    xSemaphoreGive(g_ring.mutex);
+}
+
+// 只覆盖同 ID 的旧帧；新 ID 在槽位满时替换最久未收到报文的 ID。
+static void can_monitor_record(const can_msg_entry_t *entry)
+{
+    xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
+    can_monitor_id_t *bucket = NULL;
+    for (uint32_t i = 0; i < g_ring.id_count; i++) {
+        if (g_ring.ids[i].entries[0].id == entry->id) {
+            bucket = &g_ring.ids[i];
+            break;
+        }
+    }
+    if (!bucket) {
+        if (g_ring.id_count < CAN_MONITOR_MAX_IDS) {
+            bucket = &g_ring.ids[g_ring.id_count++];
+        } else {
+            uint32_t oldest_age = 0;
+            for (uint32_t i = 0; i < g_ring.id_count; i++) {
+                can_monitor_id_t *candidate = &g_ring.ids[i];
+                uint32_t last = (candidate->head + CAN_MONITOR_PER_ID - 1) % CAN_MONITOR_PER_ID;
+                uint32_t age = g_ring.head - candidate->seq[last];
+                if (!bucket || age > oldest_age) {
+                    bucket = candidate;
+                    oldest_age = age;
+                }
+            }
+        }
+        bucket->head = 0;
+        bucket->count = 0;
+    }
+    bucket->entries[bucket->head] = *entry;
+    bucket->seq[bucket->head] = g_ring.head++;
+    bucket->head = (bucket->head + 1) % CAN_MONITOR_PER_ID;
+    if (bucket->count < CAN_MONITOR_PER_ID) bucket->count++;
+    if (g_ring.count < UINT32_MAX) g_ring.count++;
+    if (s_live.entries) {
+        s_live.entries[s_live.head % CAN_LIVE_CAPACITY] = *entry;
+        s_live.head++;
+        if (s_live.count < CAN_LIVE_CAPACITY) s_live.count++;
+    }
+    xSemaphoreGive(g_ring.mutex);
+}
+
+// 清空报文列表不清除此通道；多个浏览器各自持有游标，不消耗彼此的数据。
+void can_get_live(uint64_t from, bool reset, can_msg_entry_t *out,
+                  uint32_t max_entries, uint32_t *out_count, can_live_meta_t *meta)
+{
+    can_get_live_filtered(from, reset, NULL, 0, out, NULL, max_entries, out_count, meta);
+}
+
+void can_get_live_filtered(uint64_t from, bool reset, const uint32_t *ids, uint32_t id_count,
+                           can_msg_entry_t *out, uint64_t *seq, uint32_t max_entries,
+                           uint32_t *out_count, can_live_meta_t *meta)
+{
+    *out_count = 0;
+    memset(meta, 0, sizeof(*meta));
+    if (!g_ring.mutex) return;
+    xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
+    meta->ready = s_live.entries != NULL;
+    meta->head = s_live.head;
+    uint64_t oldest = s_live.head - s_live.count;
+    if (reset || from > s_live.head) from = oldest;
+    if (from < oldest) { meta->lost = oldest - from; from = oldest; }
+    uint32_t count = 0;
+    uint64_t cursor = from;
+    while (cursor < s_live.head && count < max_entries) {
+        const can_msg_entry_t *entry = &s_live.entries[cursor % CAN_LIVE_CAPACITY];
+        bool match = ids == NULL;
+        for (uint32_t i = 0; !match && i < id_count; i++) match = ids[i] == entry->id;
+        if (match) {
+            out[count] = *entry;
+            if (seq) seq[count] = cursor;
+            count++;
+        }
+        cursor++;
+    }
+    meta->from = from;
+    meta->next = cursor;
+    *out_count = count;
     xSemaphoreGive(g_ring.mutex);
 }
 
@@ -196,12 +315,7 @@ static void can_rx_task(void *arg)
                 // 记录优先于监控和频率统计，且不引用可能被清空/覆盖的环形槽。
                 can_log_write(&entry);
             }
-            xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
-            uint32_t idx = g_ring.head & (CAN_RX_RING_SIZE - 1);
-            g_ring.entries[idx] = entry;
-            g_ring.head++;
-            if (g_ring.count < UINT32_MAX) g_ring.count++;
-            xSemaphoreGive(g_ring.mutex);
+            can_monitor_record(&entry);
             can_freq_record(rx_msg.identifier, now_ms);
         }
     }
@@ -286,17 +400,22 @@ static void twai_print_status(void)
 
 esp_err_t can_init(void)
 {
+    g_ring.id_count = 0;
     g_ring.head = 0;
     g_ring.count = 0;
     s_boot_id = esp_random();
     g_ring.mutex = xSemaphoreCreateMutex();
     g_send_mutex = xSemaphoreCreateMutex();
     g_freq_mutex = xSemaphoreCreateMutex();
+    s_live.entries = heap_caps_malloc(CAN_LIVE_CAPACITY * sizeof(can_msg_entry_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_live.entries) ESP_LOGW(TAG, "Live curve transport unavailable: no PSRAM buffer");
 
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(TWAI_TX_GPIO, TWAI_RX_GPIO, TWAI_MODE_NORMAL);
     g_config.alerts_enabled = TWAI_ALERT_ALL;
     g_config.tx_queue_len = 10;
-    g_config.rx_queue_len = 20;
+    // 监控快照/曲线/录制并发时吸收短时调度延迟，避免 20 帧队列溢出。
+    g_config.rx_queue_len = 128;
 
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();

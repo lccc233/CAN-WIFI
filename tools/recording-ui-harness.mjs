@@ -119,6 +119,7 @@ export function device(signals = [signal()]) {
     }
     if (path.pathname === '/api/mail/send')
       return backend.mailHook ? backend.mailHook(request) : response({ ok: true, message: 'accepted' });
+    if (path.pathname === '/api/live') return response({ boot: 'test-live', ready: true, from: 0, next: 0, head: 0, lost: 0, frames: [] });
     if (path.pathname === '/api/messages')
       return response({ total: 0, messages: [], freqs: [] });
     if (path.pathname === '/api/time') return response({ ok: true });

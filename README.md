@@ -9,12 +9,14 @@
   - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **自定义曲线**（任意 ID 自定义信号）
   - 按 ID 分组展示最新消息（**按 ID 从小到大排序**），列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
   - **Freq**：每个 ID 的发送频率（条/秒，基于滚动 1 秒窗口统计）
-  - 点击某行进入该 ID 的**原始报文历史表**（自动滚动跟随最新），无内部曲线
+  - 监控缓存按 ID 独立保留**最新 10 条**，高频 ID 不挤占其他 ID 的历史；最多跟踪 128 个 ID，超出时淘汰最久未更新的 ID。
+  - 点击某行进入该 ID 的**原始报文历史表**（最新在上，最多 10 条），无内部曲线
   - 发送面板固定在 CAN Monitor 页面底部；进入详情页时隐藏（替换为返回按钮）
   - 支持手动发送任意 CAN 帧、一键清空
 - **自定义曲线页**（信号解码和绘图在浏览器实现）：
   - 在详情页用「+ 添加曲线」为**任意 CAN ID** 定义信号：起始位/位长/字节序（DBC 位号，Motorola=MSB 位号、Intel=LSB 位号）/符号/factor/offset/单位/颜色，`值 = raw × factor + offset`
-  - 每个信号一条独立曲线带（自动量程 + niceStep 刻度），窗口 10s/30s/60s 可切换，可暂停冻结读数
+  - 每个信号一条独立曲线带（自动量程 + niceStep 刻度），窗口 10s/20s/30s/60s 可切换（默认 20s），可暂停冻结读数
+  - 曲线使用独立增量通道，只传输已配置信号的 ID；浏览器按时间保留最近 60 秒原始/解码数据，动态扩容以覆盖所选窗口，不受每 ID 10 条报文显示限制。断线或取数过慢导致传输缓冲覆盖时显示缺帧提示；刷新页面需重新积累曲线历史。
   - Monitor 主表与详情表中，已配置信号覆盖的**字节按信号颜色高亮**，实时数值随轮询刷新
   - **完整数据记录器**：Record 在设备逐帧保存已启用信号对应 ID 的原始报文，固定本次信号配置；
     网页每批读取最多 128 帧，解码结果共用于曲线和完整记录，停止后自动核对、补齐并确认最终帧数。
@@ -215,6 +217,7 @@ OAuth 授权仅用于首次配置；之后由设备保存轮换的 refresh token
 | `GET /api/messages` | 返回 `{boot,clk:{sync,boot,ep},rec,total,freqs:[{id,f}],messages:[{seq,t,id,dlc,ext,data}]}`；`rec` 含记录编号、容量及采集质量；服务端忙闸期间秒回 `{"busy":1}` |
 | `POST /api/time` | 浏览器授时：body `{epoch_ms, tz}`（UTC 毫秒 + 时区偏移分钟） |
 | `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended）；id 越界（标准帧 >0x7FF / 扩展帧 >0x1FFFFFFF）或 dlc 非法时返回 400 |
+| `POST /api/live`（也支持 GET 查询） | JSON `{from,boot,ids:[数值ID...]}` 按游标增量返回曲线目标帧（最多 512 帧），报告缓冲覆盖；独立于监控清空及完整记录 |
 | `POST /api/clear` | 清空消息缓冲与频率统计 |
 | `POST /api/rec/start` | body `{signals:[...]}` 开始完整录制并冻结配置；无 body 保留旧版双 ID 模式 |
 | `POST /api/rec/stop` | body `{session}` 原子停止并返回最终帧数/配置，保留数据 |

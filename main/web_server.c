@@ -115,6 +115,114 @@ static esp_err_t root_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// 用批量 HTTP chunk 发送，避免每帧一个网络写入拖慢曲线与记录同步。
+static esp_err_t send_monitor_frames(httpd_req_t *req, const can_msg_entry_t *frames,
+                                      const uint32_t *seq, const uint64_t *live_seq, uint32_t count)
+{
+    // 同一个 HTTP 任务串行发送；大块减少 WiFi TCP 往返，且不占任务栈。
+    static char chunk[16384];
+    size_t used = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        char entry[160];
+        int n = snprintf(entry, sizeof(entry),
+            "%s{\"seq\":%llu,\"t\":%lu,\"id\":\"0x%lX\",\"dlc\":%u,\"ext\":%s,\"data\":\"",
+            i ? "," : "", (unsigned long long)(seq ? seq[i] : live_seq[i]),
+            (unsigned long)frames[i].timestamp_ms, (unsigned long)frames[i].id,
+            frames[i].dlc, frames[i].extended ? "true" : "false");
+        if (n < 0 || (size_t)n + 27 > sizeof(entry)) return ESP_FAIL;
+        for (uint32_t j = 0; j < frames[i].dlc && j < 8; j++) {
+            if (j) entry[n++] = ' ';
+            snprintf(entry + n, sizeof(entry) - n, "%02X", frames[i].data[j]);
+            n += 2;
+        }
+        entry[n++] = '"'; entry[n++] = '}';
+        if (used + n > sizeof(chunk)) {
+            esp_err_t ret = httpd_resp_send_chunk(req, chunk, used);
+            if (ret != ESP_OK) return ret;
+            used = 0;
+        }
+        memcpy(chunk + used, entry, n); used += n;
+    }
+    return used ? httpd_resp_send_chunk(req, chunk, used) : ESP_OK;
+}
+
+// 独立增量通道，清空监控和录制状态都不改变其游标。
+static esp_err_t api_live_handler(httpd_req_t *req)
+{
+    char query[896], from_text[24], boot_text[16], current_boot[16], id_text[704];
+    uint32_t ids[CAN_LOG_MAX_IDS], id_count = 0;
+    bool filtered = false;
+    uint64_t from = 0;
+    bool reset = true;
+    snprintf(current_boot, sizeof(current_boot), "%08lx", (unsigned long)can_get_boot_id());
+    if (req->method == HTTP_POST) {
+        cJSON *body = read_json_body(req, 2048);
+        if (!body) return ESP_FAIL;
+        cJSON *cursor = cJSON_GetObjectItemCaseSensitive(body, "from");
+        cJSON *boot = cJSON_GetObjectItemCaseSensitive(body, "boot");
+        cJSON *requested = cJSON_GetObjectItemCaseSensitive(body, "ids");
+        bool valid = cJSON_IsNumber(cursor) && isfinite(cursor->valuedouble) &&
+                     cursor->valuedouble >= 0 && cursor->valuedouble <= 9007199254740991.0 &&
+                     floor(cursor->valuedouble) == cursor->valuedouble &&
+                     cJSON_IsArray(requested) && cJSON_GetArraySize(requested) <= CAN_LOG_MAX_IDS;
+        if (valid) {
+            from = (uint64_t)cursor->valuedouble;
+            reset = !cJSON_IsString(boot) || strcmp(boot->valuestring, current_boot) != 0;
+            cJSON *item;
+            cJSON_ArrayForEach(item, requested) {
+                if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) || item->valuedouble < 0 ||
+                    item->valuedouble > 0x1FFFFFFF || floor(item->valuedouble) != item->valuedouble) { valid = false; break; }
+                ids[id_count++] = (uint32_t)item->valuedouble;
+            }
+        }
+        cJSON_Delete(body);
+        if (!valid) return json_error(req, "400 Bad Request", "Invalid curve cursor or IDs");
+        filtered = true;
+    } else {
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+            httpd_query_key_value(query, "from", from_text, sizeof(from_text)) == ESP_OK) {
+            if (!*from_text) return json_error(req, "400 Bad Request", "Invalid live cursor");
+            for (const char *p = from_text; *p; p++)
+                if (!isdigit((unsigned char)*p)) return json_error(req, "400 Bad Request", "Invalid live cursor");
+            errno = 0;
+            from = strtoull(from_text, NULL, 10);
+            if (errno || from > 9007199254740991ULL) return json_error(req, "400 Bad Request", "Invalid live cursor");
+            reset = httpd_query_key_value(query, "boot", boot_text, sizeof(boot_text)) != ESP_OK ||
+                    strcmp(boot_text, current_boot) != 0;
+        }
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+            httpd_query_key_value(query, "ids", id_text, sizeof(id_text)) == ESP_OK) {
+            filtered = true;
+            char *saved = NULL;
+            for (char *token = strtok_r(id_text, ",", &saved); token; token = strtok_r(NULL, ",", &saved)) {
+                char *end;
+                errno = 0;
+                unsigned long id = strtoul(token, &end, 16);
+                if (errno || end == token || *end || id > 0x1FFFFFFFUL || id_count >= CAN_LOG_MAX_IDS)
+                    return json_error(req, "400 Bad Request", "Invalid curve IDs");
+                ids[id_count++] = id;
+            }
+        }
+    }
+    static can_msg_entry_t frames[CAN_LIVE_BATCH];
+    static uint64_t seq[CAN_LIVE_BATCH];
+    can_live_meta_t meta;
+    uint32_t count;
+    can_get_live_filtered(from, reset, filtered ? ids : NULL, id_count, frames, seq, CAN_LIVE_BATCH, &count, &meta);
+    char header[256];
+    snprintf(header, sizeof(header),
+             "{\"boot\":\"%s\",\"ready\":%s,\"from\":%llu,\"next\":%llu,\"head\":%llu,\"lost\":%llu,\"frames\":[",
+             current_boot, meta.ready ? "true" : "false", (unsigned long long)meta.from,
+             (unsigned long long)meta.next, (unsigned long long)meta.head, (unsigned long long)meta.lost);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t ret = httpd_resp_sendstr_chunk(req, header);
+    if (ret == ESP_OK) ret = send_monitor_frames(req, frames, NULL, seq, count);
+    if (ret == ESP_OK) ret = httpd_resp_sendstr_chunk(req, "]}");
+    if (ret == ESP_OK) ret = httpd_resp_sendstr_chunk(req, NULL);
+    return ret;
+}
+
 // GET /api/messages — 返回 CAN 消息 JSON
 static esp_err_t api_messages_handler(httpd_req_t *req)
 {
@@ -126,10 +234,12 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    can_msg_entry_t snapshot[CAN_RX_RING_SIZE];
-    uint32_t seq[CAN_RX_RING_SIZE];
+    // 最大 128 ID × 10 帧，放静态区避免超过 HTTP 任务的 12KB 栈。
+    // HTTP server 在同一任务中串行调用 handler。
+    static can_msg_entry_t snapshot[CAN_MONITOR_CAPACITY];
+    static uint32_t seq[CAN_MONITOR_CAPACITY];
     uint32_t count, total;
-    can_get_snapshot_seq(snapshot, seq, CAN_RX_RING_SIZE, &count, &total);
+    can_get_snapshot_seq(snapshot, seq, CAN_MONITOR_CAPACITY, &count, &total);
 
     can_id_freq_t freqs[CAN_FREQ_MAX_IDS];
     int freq_count = can_get_id_freqs(freqs, CAN_FREQ_MAX_IDS);
@@ -164,49 +274,28 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     if (rec_ret == ESP_OK) rec_ret = httpd_resp_sendstr_chunk(req, total_hdr);
     if (rec_ret != ESP_OK) { msgs_busy_release(); return ESP_FAIL; }
 
+    char freq_chunk[2048];
+    size_t freq_used = 0;
     for (int i = 0; i < freq_count; i++) {
         char entry[80];
         snprintf(entry, sizeof(entry), "%s{\"id\":\"0x%lX\",\"f\":%lu}",
                  (i > 0) ? "," : "",
                  (unsigned long)freqs[i].id,
                  (unsigned long)freqs[i].rate_x10);
-        httpd_resp_sendstr_chunk(req, entry);
+        size_t length = strlen(entry);
+        if (freq_used + length > sizeof(freq_chunk)) {
+            if (httpd_resp_send_chunk(req, freq_chunk, freq_used) != ESP_OK) { msgs_busy_release(); return ESP_FAIL; }
+            freq_used = 0;
+        }
+        memcpy(freq_chunk + freq_used, entry, length); freq_used += length;
     }
+
+    if (freq_used && httpd_resp_send_chunk(req, freq_chunk, freq_used) != ESP_OK) { msgs_busy_release(); return ESP_FAIL; }
 
     httpd_resp_sendstr_chunk(req, "],\"messages\":[");
 
-    // emitted 而非 i 决定逗号前缀：某条因防御性检查被跳过时 JSON 仍合法
-    uint32_t emitted = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        char entry[160];
-        bool ok = true;
-        int n = snprintf(entry, sizeof(entry),
-            "%s{\"seq\":%lu,\"t\":%lu,\"id\":\"0x%lX\",\"dlc\":%d,\"ext\":%s,\"data\":\"",
-            (emitted > 0) ? "," : "",
-            (unsigned long)seq[i],
-            (unsigned long)snapshot[i].timestamp_ms,
-            (unsigned long)snapshot[i].id,
-            snapshot[i].dlc,
-            snapshot[i].extended ? "true" : "false");
-        // 数据段上限 8*3-1=23 字符 + 结尾 "\"}" + NUL 共 26；字段均有界时
-        // 正常最大 ~90 字符，远用不到该余量——纯防御，防截断后 n 越界
-        if (n < 0 || (size_t)n + 27 > sizeof(entry)) ok = false;
-        for (int j = 0; ok && j < snapshot[i].dlc && j < 8; j++) {
-            if (j > 0) entry[n++] = ' ';
-            if (snprintf(entry + n, sizeof(entry) - n, "%02X", snapshot[i].data[j]) != 2) {
-                ok = false;
-                break;
-            }
-            n += 2;
-        }
-        if (ok) {
-            entry[n++] = '"';
-            entry[n++] = '}';
-            entry[n] = '\0';
-            httpd_resp_sendstr_chunk(req, entry);
-            emitted++;
-        }
-    }
+    esp_err_t frame_ret = send_monitor_frames(req, snapshot, seq, NULL, count);
+    if (frame_ret != ESP_OK) { msgs_busy_release(); return frame_ret; }
 
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
@@ -908,7 +997,7 @@ static esp_err_t api_export_handler(httpd_req_t *req)
 esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 17;
+    config.max_uri_handlers = 19;
     config.stack_size = HTTP_TASK_STACK_SIZE;
 
     esp_err_t ret = httpd_start(&s_server, &config);
@@ -918,6 +1007,8 @@ esp_err_t web_server_start(void)
     }
 
     httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_handler };
+    httpd_uri_t live_post = { .uri = "/api/live", .method = HTTP_POST, .handler = api_live_handler };
+    httpd_uri_t live = { .uri = "/api/live", .method = HTTP_GET, .handler = api_live_handler };
     httpd_uri_t messages = { .uri = "/api/messages", .method = HTTP_GET, .handler = api_messages_handler };
     httpd_uri_t send = { .uri = "/api/send", .method = HTTP_POST, .handler = api_send_handler };
     httpd_uri_t clear = { .uri = "/api/clear", .method = HTTP_POST, .handler = api_clear_handler };
@@ -936,6 +1027,8 @@ esp_err_t web_server_start(void)
 
     httpd_register_uri_handler(s_server, &root);
     httpd_register_uri_handler(s_server, &messages);
+    httpd_register_uri_handler(s_server, &live);
+    httpd_register_uri_handler(s_server, &live_post);
     httpd_register_uri_handler(s_server, &send);
     httpd_register_uri_handler(s_server, &clear);
     httpd_register_uri_handler(s_server, &rec_start);

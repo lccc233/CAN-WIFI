@@ -449,4 +449,131 @@ await check('More than 200000 samples export asynchronously without trimming or 
   assert.equal(context.recordNext, count); assert.equal(context.curveRecCount, count);
 });
 
+await check('Monitor retains ten per ID, newest first, with same-time frames and stable replay', async () => {
+  const { context, element } = await app();
+  const cold = Array.from({ length: 3 }, (_, i) => frame(i, i, { id: '0x100', t: 1000 }));
+  const hot = Array.from({ length: 10 }, (_, i) => frame(193 + i, 193 + i, { id: '0x200', t: 1000 }));
+  const packet = { boot: 'monitor-a', total: 203, messages: [...cold, ...hot], freqs: [] };
+  context.processMessages(packet);
+  assert.equal(context.histById['0x100'].length, 3);
+  assert.equal(context.histById['0x200'].length, 10);
+  assert.equal(context.groupById(context.allMessages)['0x200'].seq, 202,
+    'The last received frame wins when timestamps are identical');
+  context.showDetail('0x200');
+  assert.equal((element('detailBody').innerHTML.match(/<tr>/g) || []).length, 10);
+  assert(element('detailBody').innerHTML.indexOf('CA') < element('detailBody').innerHTML.indexOf('C1'),
+    'Detail rows show newest first');
+  const latest = [...hot.slice(1), frame(203, 203, { id: '0x200', t: 1000 })];
+  context.processMessages({ ...packet, total: 204, messages: [...cold, ...latest] });
+  assert.deepEqual(plain(context.histById['0x200'].map(p => p.b[0])), latest.map(m => parseInt(m.data, 16)));
+  assert.equal(context.histById['0x100'].length, 3, 'A quiet ID keeps its own history');
+  context.processMessages({ ...packet, total: 204, messages: [...cold, ...latest] });
+  assert.equal(context.histById['0x200'].length, 10, 'Repeated snapshots add no duplicate rows');
+  context.processMessages({ ...packet, total: 205, messages: [frame(204, 204, { id: '0x300' })] });
+  assert.equal(context.histById['0x200'], undefined, 'Evicted ID details disappear with the snapshot');
+  assert.equal(element('detailBody').innerHTML, '');
+});
+
+await check('Monitor supports 128 IDs with ten each and clears details across clear and reboot', async () => {
+  const instance = await app();
+  const { context, element, backend } = instance;
+  const messages = Array.from({ length: 1280 }, (_, i) => frame(i, i, { id: '0x' + (i % 128).toString(16) }));
+  context.processMessages({ boot: 'monitor-a', total: 1280, messages, freqs: [] });
+  assert.equal(Object.keys(context.histById).length, 128);
+  assert(Object.values(context.histById).every(rows => rows.length === 10));
+  context.showDetail('0x1');
+  assert.equal((element('detailBody').innerHTML.match(/<tr>/g) || []).length, 10);
+  const originalFetch = backend.fetch;
+  context.fetch = (url, init) => url === '/api/clear' ? Promise.resolve(response({ ok: true })) : originalFetch(url, init);
+  await element('clearBtn').dispatch('click');
+  await settle();
+  assert.equal(context.allMessages.length, 0);
+  assert.equal(Object.keys(context.histById).length, 0);
+  assert.equal(element('detailBody').innerHTML, '');
+  context.processMessages({ boot: 'monitor-b', total: 1, messages: [frame(0, 99, { id: '0x1' })], freqs: [] });
+  assert.equal(context.histById['0x1'].length, 1);
+  assert.equal(context.histById['0x1'][0].b[0], 99);
+});
+
+await check('Live curves keep a full 60 seconds at 1000 Hz independently of ten monitor rows', async () => {
+  const instance = await app();
+  const { context, element } = instance;
+  const sig = signal();
+  context.configs = [sig];
+  const count = 70000;
+  for (let from = 0; from < count; from += 512) {
+    const frames = Array.from({ length: Math.min(512, count - from) }, (_, i) => frame(from + i, from + i, { t: 1000 + from + i }));
+    context.ingestLive({ boot: 'test-live', ready: true, from, next: from + frames.length, head: count, lost: 0, frames });
+  }
+  const tail = Array.from({ length: 10 }, (_, i) => frame(count - 10 + i, count - 10 + i, { t: 1000 + count - 10 + i }));
+  context.processMessages({ boot: 'monitor-a', total: count, messages: tail, freqs: [] });
+  let q = context.chartData[context.sigKey(sig)];
+  assert.equal(q.n, 60001, 'A fixed 12000-point cap would shorten a 60-second high-rate window');
+  assert.equal(q.t[q.head], 10999);
+  assert.equal(context.histById[sig.id].length, 10);
+  const draws = [];
+  context.stripRefs = [element('test-canvas')];
+  context.drawStrip = (_ctx, _w, _h, points, _sig, t0, t1) => draws.push({ points, t0, t1 });
+  for (const windowMs of [10000, 20000, 30000, 60000]) {
+    element('winSel').value = String(windowMs);
+    context.renderCharts();
+    const draw = draws.at(-1);
+    assert.equal(draw.t1 - draw.t0, windowMs);
+    assert.equal(draw.points.length, windowMs + 1);
+    assert.equal(draw.points[0].t, draw.t0);
+    assert.equal(draw.points.at(-1).t, draw.t1);
+  }
+  context.configs = [signal({ factor: 2 })];
+  context.resetMonitorDecode();
+  q = context.chartData[context.sigKey(sig)];
+  assert.equal(q.n, 60001, 'Editing decoding settings rebuilds from full curve history, not ten rows');
+  assert.equal(q.v[q.head], 9999 * 2);
+  context.ingestLive({ boot: 'test-live', ready: true, from: count, next: count + 1, head: count + 1, lost: 0,
+    frames: [frame(count, 1, { t: 132000, id: '0x200' })] });
+  assert.equal(context.curveRawById[sig.id], undefined, 'Quiet IDs expire outside the global 60-second history');
+  assert.equal(q.n, 0);
+});
+
+await check('Live cursor validation is atomic and reports overflow; recording frames are never decoded twice', async () => {
+  const instance = await app(); await start(instance);
+  const { context, backend, element } = instance;
+  backend.append(frame(0, 321)); await context.syncRecord();
+  const sig = signal(), q = context.chartData[context.sigKey(sig)];
+  assert.equal(q.n, 1);
+  context.ingestLive({ boot: 'test-live', ready: true, from: 0, next: 1, head: 1, lost: 0, frames: [frame(0, 321)] });
+  assert.equal(q.n, 1, 'The target curve uses recording data once while live history stays independent');
+  assert.throws(() => context.ingestLive({ boot: 'test-live', ready: true, from: 1, next: 3, head: 3, lost: 0,
+    frames: [frame(1), frame(2, 1, { dlc: 9 })] }));
+  assert.equal(context.curveNext, 1);
+  context.ingestLive({ boot: 'test-live', ready: true, from: 5, next: 6, head: 6, lost: 4, frames: [frame(5)] });
+  assert.equal(context.curveNext, 6); assert.equal(context.curveLost, 4);
+  assert.match(element('liveStatus').textContent, /4/);
+  await stop(instance);
+  const { text } = await csvText(context); assert.match(text, /321\n/);
+});
+
+await check('Time axis labels describe the selected elapsed window correctly', async () => {
+  const { context } = await app();
+  const labels = [];
+  const canvas = new Proxy({}, { get: (_target, name) => name === 'fillText' ? text => labels.push(text) : () => {}, set: () => true });
+  context.drawStrip(canvas, 800, 150, [{ t: 1000, v: 0 }, { t: 21000, v: 1 }], signal(), 1000, 21000);
+  assert(labels.includes('now')); assert(labels.includes('-5s')); assert(labels.includes('-20s'));
+});
+
+await check('Filtered live streams advance across unrelated IDs while recordings require every sequence', async () => {
+  const instance = await app();
+  const { context } = instance;
+  context.ingestLive({ boot: 'test-live', ready: true, from: 0, next: 30, head: 30, lost: 0,
+    frames: [frame(5, 50), frame(20, 60)] });
+  assert.equal(context.curveNext, 30);
+  assert.equal(context.curveRawById[signal().id].frames.length, 2);
+  context.ingestLive({ boot: 'test-live', ready: true, from: 30, next: 100, head: 100, lost: 0, frames: [] });
+  assert.equal(context.curveNext, 100);
+  await start(instance);
+  instance.backend.append(...Array.from({ length: 10 }, (_, i) => frame(i)));
+  assert.throws(() => context.ingestRecordBatch({ ...instance.backend.packet(), from: 0, next: 5, frames: [frame(0)] }));
+  assert.throws(() => context.ingestRecordBatch({ ...instance.backend.packet(), from: 0, next: 1, frames: [frame(4)] }));
+  assert.equal(context.recordNext, 0);
+});
+
 console.log('Recording UI checks passed. These tests simulate browser/device contracts; hardware CAN/WiFi stress remains separate.');

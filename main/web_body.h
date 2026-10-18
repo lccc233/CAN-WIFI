@@ -72,10 +72,12 @@
       <label class="win-label">窗口
         <select id="winSel">
           <option value="10000">10s</option>
-          <option value="30000" selected>30s</option>
+          <option value="20000" selected>20s</option>
+          <option value="30000">30s</option>
           <option value="60000">60s</option>
         </select>
       </label>
+      <span id="liveStatus" role="status" aria-live="polite"></span>
       <button class="btn" id="pauseBtn">暂停</button>
       <button class="btn" id="curveRecBtn">&#9679; Record</button>
       <span class="record-status" id="curveRecStatus" role="status" aria-live="polite"></span>

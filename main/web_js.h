@@ -2,6 +2,7 @@
 
 #define PAGE_JS R"rawliteral(
 <script>
+var MONITOR_PER_ID = 10;
 var allMessages = [];
 var allFreqs = [];
 var lastTotal = 0;
@@ -64,7 +65,7 @@ function groupById(messages) {
   var groups = {};
   for (var i = 0; i < messages.length; i++) {
     var m = messages[i];
-    if (!groups[m.id] || m.t > groups[m.id].t) {
+    if (!groups[m.id] || m.t >= groups[m.id].t) {
       groups[m.id] = m;
       groups[m.id].count = 0;
     }
@@ -100,13 +101,13 @@ function renderMain() {
 }
 
 function renderDetailTable() {
-  // 优先用前端积累的历史（最多 4000 条/ID，远多于服务器 128 条快照）
+  // 每个 ID 的详情只显示最新 10 条，新帧在上。
   var hist = histById[normId(detailId)] || [];
   var tbody = document.getElementById('detailBody');
   var html = '';
   var shown = 0;
   if (hist.length) {
-    for (var i = hist.length - 1; i >= 0 && shown < 200; i--, shown++) {
+    for (var i = hist.length - 1; i >= 0 && shown < MONITOR_PER_ID; i--, shown++) {
       var p = hist[i];
       html += '<tr>'
         + '<td class="col-time">' + fmtFrameTime(p.t) + '</td>'
@@ -117,9 +118,10 @@ function renderDetailTable() {
     }
   } else {
     // 页面刚打开还没有积累：退回服务器快照
-    for (var j = allMessages.length - 1; j >= 0; j--) {
+    for (var j = allMessages.length - 1; j >= 0 && shown < MONITOR_PER_ID; j--) {
       var m = allMessages[j];
       if (m.id !== detailId) continue;
+      shown++;
       html += '<tr>'
         + '<td class="col-time">' + fmtFrameTime(m.t) + '</td>'
         + '<td class="col-dlc">' + m.dlc + '</td>'
@@ -129,7 +131,7 @@ function renderDetailTable() {
     }
   }
   tbody.innerHTML = html;
-  document.getElementById('detailCount').textContent = hist.length + ' messages';
+  document.getElementById('detailCount').textContent = shown + ' messages (latest ' + MONITOR_PER_ID + ' per ID)';
   var wrap = document.getElementById('viewDetail');
   if (autoScrollDetail) wrap.scrollTop = 0;
 }
@@ -172,19 +174,21 @@ function showMain() {
   renderMain();
 }
 
-// ===== 自定义曲线（前端解码任意 ID 信号，固件零改动） =====
-// 数据源：/api/messages 的 messages 原始字节（hex 字符串），200ms 轮询快照按 ID 去重追加
+// ===== 自定义曲线：独立增量取数，不受监控每 ID 10 条限制 =====
+// /api/live 使用独立游标；浏览器保存最大 60 秒原始数据，切换窗口无需重采。
 // 信号定义：DBC 风格（start/len/endian/signed/factor/offset/unit/color/enabled），存 localStorage
 
 var CFG_KEY = 'cansignals';
 var configs = [];
 var histById = {};     // 有限的监控历史，不作为完整记录源
 var monitorBoot = null;
-var monitorSeq = -1;
-var chartData = {};    // 已解码显示缓存，只保留最近 60 秒/12000 点
+var curveBoot = null, curveNext = 0, curveLost = 0, curveLatestT = 0;
+var curveRawById = {}; // 与十条报文详情分开，保存可重新解码的 60 秒历史。
+var CURVE_HISTORY_MS = 60000;
+var chartData = {};    // 按需扩容的曲线环，覆盖最长时间窗口。
 var editingKey = null; // 正在编辑的信号 key；null = 新增
 var chartPaused = false;
-var chartWinMs = 30000;
+var chartWinMs = 20000;
 var stripRefs = [];
 
 function normId(id) {
@@ -318,9 +322,9 @@ function resetMonitorDecode() {
   if (recordState && recordState.session) return;
   chartData = {};
   var defs = displaySignals();
-  for (var id in histById) {
-    var hist = histById[id];
-    for (var i = 0; i < hist.length; i++) cacheFrameDecode(id, hist[i], defs);
+  for (var id in curveRawById) {
+    var hist = curveRawById[id];
+    for (var i = hist.head; i < hist.frames.length; i++) cacheFrameDecode(id, hist.frames[i], defs);
   }
 }
 function saveCfg() {
@@ -388,28 +392,86 @@ function loadCfg() {
   cacheCfg(); // 等设备 configured 状态返回后才决定迁移，避免覆盖已清空配置。
 }
 
-// 监控快照只用于详情/非录制曲线，按开机标识+帧序号去重。
-function histFresh(m) {
-  if (!Number.isInteger(m.seq) || m.seq <= monitorSeq) return false;
-  monitorSeq = m.seq;
-  return true;
-}
 function histPush(id, t, bytes, dlc, ext) {
   if (!histById[id]) histById[id] = [];
   var arr = histById[id];
   arr.push({ t: t, b: bytes, dlc: dlc, e: ext ? 1 : 0 });
-  if (arr.length > 4000) arr.splice(0, arr.length - 4000);
+  if (arr.length > MONITOR_PER_ID) arr.splice(0, arr.length - MONITOR_PER_ID);
 }
-var CHART_CAP = 12000;
+// 250kbps 总线在 60 秒内的理论帧数低于此上限；按实际点数逐步分配。
+var CHART_CAP = 360000;
 function displaySignals() { return recordState && recordState.session ? recordSignals : configs; }
+function trimChart(q, cutoff) {
+  while (q.n && q.t[q.head] < cutoff) { q.head = (q.head + 1) % q.cap; q.n--; }
+}
 function chartPush(sig, t, v) {
   var key = sigKey(sig), q = chartData[key];
-  if (!q) q = chartData[key] = { t: new Float64Array(CHART_CAP), v: new Float64Array(CHART_CAP), head: 0, n: 0 };
-  while (q.n && q.t[q.head] < t - 60000) { q.head = (q.head + 1) % CHART_CAP; q.n--; }
-  var pos = (q.head + q.n) % CHART_CAP;
+  if (!q) q = chartData[key] = { t: new Float64Array(2048), v: new Float64Array(2048), cap: 2048, head: 0, n: 0 };
+  trimChart(q, t - CURVE_HISTORY_MS);
+  if (q.n === q.cap && q.cap < CHART_CAP) {
+    var cap = Math.min(CHART_CAP, q.cap * 2), times = new Float64Array(cap), values = new Float64Array(cap);
+    for (var i = 0; i < q.n; i++) { var old = (q.head + i) % q.cap; times[i] = q.t[old]; values[i] = q.v[old]; }
+    q.t = times; q.v = values; q.head = 0; q.cap = cap;
+  }
+  var pos = (q.head + q.n) % q.cap;
   q.t[pos] = t; q.v[pos] = v === null ? NaN : v;
-  if (q.n === CHART_CAP) q.head = (q.head + 1) % CHART_CAP;
+  if (q.n === q.cap) q.head = (q.head + 1) % q.cap;
   else q.n++;
+}
+function pruneCurveHistory() {
+  var cutoff = curveLatestT - CURVE_HISTORY_MS;
+  for (var id in curveRawById) {
+    var hist = curveRawById[id];
+    while (hist.head < hist.frames.length && hist.frames[hist.head].t < cutoff) hist.head++;
+    if (hist.head === hist.frames.length) delete curveRawById[id];
+    else if (hist.head > 1024 && hist.head * 2 > hist.frames.length) {
+      hist.frames = hist.frames.slice(hist.head); hist.head = 0;
+    }
+  }
+  if (!(recordState && recordState.session)) for (var key in chartData) trimChart(chartData[key], cutoff);
+}
+function ingestLive(d) {
+  if (!d || typeof d.boot !== 'string' || !Array.isArray(d.frames) || d.frames.length > 512 ||
+      ![d.from, d.next, d.head, d.lost].every(function(v) { return Number.isSafeInteger(v) && v >= 0; }) ||
+      d.next < d.from + d.frames.length || d.next > d.head) throw new Error('曲线数据序号无效');
+  var changed = curveBoot !== d.boot;
+  if (!changed && d.from !== curveNext && !(d.lost > 0 && d.from === curveNext + d.lost)) throw new Error('曲线数据不连续');
+  var parsed = d.frames.map(function(m, i) {
+    if (!Number.isSafeInteger(m.seq) || m.seq < d.from || m.seq >= d.next || (i && m.seq <= d.frames[i - 1].seq) || !Number.isFinite(m.t) || m.t < 0 || !/^0x[0-9a-f]+$/i.test(String(m.id))) throw new Error('曲线帧无效');
+    return { id: normId(m.id), point: { t: m.t, b: frameBytes(m), dlc: m.dlc } };
+  });
+  if (!d.ready) { document.getElementById('liveStatus').textContent = '曲线缓存不可用'; return false; }
+  if (changed) {
+    curveBoot = d.boot; curveNext = d.from; curveLost = 0; curveLatestT = 0; curveRawById = {};
+    if (!(recordState && recordState.session)) chartData = {};
+  }
+  if (d.lost) { curveLost += d.lost; curveNext = d.from; }
+  for (var i = 0; i < parsed.length; i++) {
+    var item = parsed[i], hist = curveRawById[item.id];
+    if (!hist) hist = curveRawById[item.id] = { frames: [], head: 0 };
+    hist.frames.push(item.point); curveLatestT = Math.max(curveLatestT, item.point.t); curveNext = d.frames[i].seq + 1;
+    // 已录制目标帧继续由 record/data 单次解码，监控增量不重复采样。
+    if (!(recordState && recordState.session && recordGroupById[item.id])) cacheFrameDecode(item.id, item.point, displaySignals());
+  }
+  curveNext = d.next;
+  pruneCurveHistory();
+  document.getElementById('liveStatus').textContent = curveLost ? '曲线缺帧 ' + curveLost + '，连接曾中断或取数过慢' : '';
+  return curveNext < d.head;
+}
+var liveBusy = false;
+async function pollLive() {
+  if (liveBusy) return;
+  liveBusy = true;
+  try {
+    for (var cycle = 0; cycle < 8; cycle++) {
+      var ids = [];
+      configs.forEach(function(s) { if (ids.indexOf(s.id) < 0) ids.push(s.id); });
+      var request = { from: curveNext, boot: curveBoot, ids: ids.map(function(id) { return parseInt(id.slice(2), 16); }) };
+      if (!ingestLive(await postJson('/api/live', request))) break;
+      await yieldUi();
+    }
+  } catch (e) { document.getElementById('liveStatus').textContent = '曲线同步失败：' + e.message; }
+  finally { liveBusy = false; }
 }
 function cacheFrameDecode(id, frame, defs) {
   for (var i = 0; i < defs.length; i++) {
@@ -913,12 +975,14 @@ function buildChartList() {
   for (var j = 0; j < defs.length; j++) stripRefs[j] = document.getElementById('cv_' + j);
 }
 function renderCharts() {
-  chartWinMs = parseInt(document.getElementById('winSel').value) || 30000;
+  chartWinMs = parseInt(document.getElementById('winSel').value);
+  if ([10000, 20000, 30000, 60000].indexOf(chartWinMs) < 0) chartWinMs = 20000;
   var maxT = 0;
   for (var key in chartData) {
     var q = chartData[key];
-    if (q.n) maxT = Math.max(maxT, q.t[(q.head + q.n - 1) % CHART_CAP]);
+    if (q.n) maxT = Math.max(maxT, q.t[(q.head + q.n - 1) % q.cap]);
   }
+  if (!(recordState && recordState.session)) maxT = Math.max(maxT, curveLatestT);
   var t0 = maxT - chartWinMs, wrap = document.getElementById('viewCharts');
   var cssW = Math.max(280, (wrap.clientWidth || window.innerWidth) - 24), dpr = window.devicePixelRatio || 1, defs = displaySignals();
   for (var i = 0; i < defs.length; i++) {
@@ -934,7 +998,7 @@ function renderCharts() {
     var ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     var pts = [], lastV = null, q = chartData[sigKey(s)];
     if (q) for (var k = 0; k < q.n; k++) {
-      var index = (q.head + k) % CHART_CAP;
+      var index = (q.head + k) % q.cap;
       if (q.t[index] < t0) continue;
       var v = Number.isFinite(q.v[index]) ? q.v[index] : null;
       pts.push({ t: q.t[index], v: v }); if (v !== null) lastV = v;
@@ -985,7 +1049,7 @@ function drawStrip(ctx, cssW, cssH, pts, s, t0, t1) {
     if (x < padL - 0.5) break;
     ctx.strokeStyle = '#f7f7f7';
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
-    ctx.fillText(ts === 0 ? 'now' : '-' + (stepT < 1 ? (spanS - ts).toFixed(1) : String(Math.round(spanS - ts))) + 's', x, padT + plotH + 4);
+    ctx.fillText(ts === 0 ? 'now' : '-' + (stepT < 1 ? ts.toFixed(1) : String(Math.round(ts))) + 's', x, padT + plotH + 4);
   }
   ctx.strokeStyle = '#ccc';
   ctx.beginPath();
@@ -1116,16 +1180,15 @@ function processMessages(d) {
     clkEp = d.clk.ep || 0;
   }
   var bootChanged = monitorBoot !== d.boot;
-  if (bootChanged) { monitorBoot = d.boot; monitorSeq = -1; histById = {}; if (!recordState) chartData = {}; }
+  if (bootChanged) { monitorBoot = d.boot; histById = {}; }
   if (d.total !== lastTotal || bootChanged) {
     allMessages = d.messages || []; allFreqs = d.freqs || []; lastTotal = d.total;
+    // 历史与设备快照保持一致，清空或 ID 槽淘汰后不留下旧详情。
+    histById = {};
     for (var i = 0; i < allMessages.length; i++) {
       var m = allMessages[i];
-      if (!histFresh(m)) continue;
       var bytes = frameBytes(m), nid = normId(m.id);
       histPush(nid, m.t, bytes, m.dlc, m.ext);
-      // 已接管会话的目标帧由 record/data 单次解码，监控快照不重复解码。
-      if (!(recordState && recordState.session && recordGroupById[nid])) cacheFrameDecode(nid, { t: m.t, b: bytes, dlc: m.dlc }, displaySignals());
     }
     if (currentView === 'main') renderMain();
     else if (currentView === 'detail') { renderSigList(); renderDetailTable(); }
@@ -1136,6 +1199,8 @@ function processMessages(d) {
 
 setInterval(pollMessages, 200);
 pollMessages();
+setInterval(pollLive, 200);
+pollLive();
 
 // 页面加载即授时，之后每 10 分钟校准一次
 syncClock();
@@ -1144,6 +1209,7 @@ setInterval(syncClock, 600000);
 document.getElementById('clearBtn').addEventListener('click', function() {
   fetch('/api/clear', { method: 'POST' }).then(function() {
     allMessages = [];
+    histById = {};
     allFreqs = [];
     lastTotal = 0;
     if (currentView === 'main') renderMain();
