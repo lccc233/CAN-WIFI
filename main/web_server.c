@@ -242,6 +242,8 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     can_get_snapshot_seq(snapshot, seq, CAN_MONITOR_CAPACITY, &count, &total);
     can_msg_entry_t battery[CAN_BATTERY_FRAME_COUNT];
     uint32_t battery_count = can_get_battery_snapshot(battery);
+    can_msg_entry_t rcu[CAN_RCU_FRAME_COUNT];
+    uint32_t rcu_count = can_get_rcu_snapshot(rcu);
 
     can_id_freq_t freqs[CAN_FREQ_MAX_IDS];
     int freq_count = can_get_id_freqs(freqs, CAN_FREQ_MAX_IDS);
@@ -301,6 +303,9 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
 
     httpd_resp_sendstr_chunk(req, "],\"battery\":[");
     frame_ret = send_monitor_frames(req, battery, NULL, NULL, battery_count);
+    if (frame_ret != ESP_OK) { msgs_busy_release(); return frame_ret; }
+    httpd_resp_sendstr_chunk(req, "],\"rcu\":[");
+    frame_ret = send_monitor_frames(req, rcu, NULL, NULL, rcu_count);
     if (frame_ret != ESP_OK) { msgs_busy_release(); return frame_ret; }
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);

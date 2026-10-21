@@ -1,9 +1,12 @@
 # Windows 独立烧录包
 
+> **验证状态（2026-10-21，截至本次提交）：今天截至目前的所有提交均未经过真机验证。**
+> 当天的编译、ESP32 烧录及 PCAN 结果仅为台架模拟验证，未连接真实电池、增程器或车辆；见 [今日提交验证状态](validation-status.md)。
+
 下载：[GitHub Release · v2026.10.08-recording](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.08-recording)。
 
-此历史发布包不含 2026-10-21 新增的电池信息页。本次仅更新源码与技术文档，未替换历史 EXE/ZIP。
-需要电池功能时，从仓库最新源码构建 `build-mail/` 三段 BIN；功能与台架验证见 [电池信息说明](battery.md)。
+此历史发布包不含 2026-10-21 新增的电池和增程器页面，未替换历史 EXE/ZIP。
+需要这些功能时，从仓库最新源码构建 `build-mail/` 三段 BIN；验证范围见 [电池说明](battery.md) 和 [RCU 说明](rcu.md)。
 
 发布目录：`release/CAN-WIFI_20261008_RECORDING_Win64/`。
 压缩包：`release/CAN-WIFI_20261008_RECORDING_Win64.zip`。
@@ -50,7 +53,7 @@ EXE 内包含全部固件，仅复制这个 EXE 到其他目录也能烧录。
 连接失败可按住 BOOT、点按 RESET 后松开 BOOT，再重新 Connect；通信不稳定可降到 115200 重试。
 首次打开网页需加载在线资源，准备完全离线烧录时使用本包 EXE。
 
-以上按钮和参数依据 [乐鑫官方工具及源码](https://github.com/espressif/esptool-js) 核对；独立 EXE 烧录流程此前已实机验证，完整记录固件已实机烧录及压力测试。网页版未重复执行实机烧录。
+以上按钮和参数依据 [乐鑫官方工具及源码](https://github.com/espressif/esptool-js) 核对；独立 EXE 的历史烧录检查见下方 2026-10-07 记录，完整记录固件的历史压力测试见 [2026-10-08 台架报告](recording-stress.md)。网页版未重复执行烧录。这些历史记录不代表 2026-10-21 提交已通过真机验证。
 
 ## 配置保留与邮箱授权
 

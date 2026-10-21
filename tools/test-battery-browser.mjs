@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const out = path.resolve('tmp/battery');
 fs.mkdirSync(out,{recursive:true});
-const html = ['web_head.h','web_body.h','web_battery.h','web_js.h'].map(name =>
+const html = ['web_head.h','web_body.h','web_battery.h','web_rcu.h','web_js.h'].map(name =>
   fs.readFileSync(new URL('../main/'+name,import.meta.url),'utf8').match(/R"rawliteral\(([\s\S]*?)\)rawliteral"/)[1]).join('');
 fs.writeFileSync(path.join(out,'preview.html'),html);
 const browser = await chromium.launch({headless:true, ...(process.env.BROWSER_EXECUTABLE ? {executablePath:process.env.BROWSER_EXECUTABLE} : {})});

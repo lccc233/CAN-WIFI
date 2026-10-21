@@ -85,6 +85,16 @@
   tr.clickable { cursor: pointer; }
   tr.battery-row td { background: #cceeff; }
   tr.battery-row:hover td { background: #aee2fc; }
+  tr.rcu-row td { background: #ffe1e1; }
+  tr.rcu-row:hover td { background: #ffcaca; }
+  .rcu-page .battery-heading h2, .rcu-page .battery-value { color: #94504f; }
+  .battery-metrics.rcu-metrics { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .rcu-table-wrap table { margin-top: 10px; table-layout: fixed; }
+  .rcu-table-wrap th, .rcu-table-wrap td { white-space: normal; overflow-wrap: anywhere; }
+  .rcu-table-wrap th:first-child { width: 32%; }
+  .rcu-table-wrap th:last-child { width: 30%; }
+  .rcu-dtc-list { max-height: 240px; overflow-y: auto; }
+  .rcu-flag { color: #b52620; font-weight: 600; }
   .battery-page { max-width: 1120px; margin: 0 auto; padding: 20px 16px; font-family: system-ui, sans-serif; }
   .battery-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .battery-heading h2 { font-size: 1.3rem; color: #175574; }
@@ -110,6 +120,8 @@
   .battery-source-wrap { overflow-x: auto; margin-top: 12px; }
   .battery-source-wrap td { font-size: .73rem; }
   @media (max-width: 640px) {
+    .top-tabs { flex-wrap: wrap; flex-shrink: 0; }
+    .battery-metrics.rcu-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
     .battery-page { padding: 14px 10px; }
     .battery-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .battery-metric, .battery-section { padding: 12px; }

@@ -23,6 +23,8 @@
 
 // CATL 状态/温度/两类故障各保留最新一帧，不随主表清空或 ID 淘汰丢失。
 #define CAN_BATTERY_FRAME_COUNT 4
+// RCU: 8 regular IDs, 5 DTC multiplex groups, 1 unknown-group diagnostic slot.
+#define CAN_RCU_FRAME_COUNT 14
 
 // 单条 CAN 消息记录。
 // packed 消除对齐 padding：20B -> 18B（PSRAM 容量 +18%）。
@@ -51,6 +53,7 @@ typedef struct {
 esp_err_t can_init(void);
 esp_err_t can_send_message(uint32_t id, bool extended, uint8_t dlc, const uint8_t *data);
 uint32_t can_get_battery_snapshot(can_msg_entry_t out[CAN_BATTERY_FRAME_COUNT]);
+uint32_t can_get_rcu_snapshot(can_msg_entry_t out[CAN_RCU_FRAME_COUNT]);
 void      can_get_snapshot(can_msg_entry_t *out, uint32_t max_entries,
                            uint32_t *out_count, uint32_t *out_total);
 // 快照按接收序号从旧到新返回；容量不足时返回其中最新的帧。

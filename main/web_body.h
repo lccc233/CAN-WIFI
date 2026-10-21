@@ -15,11 +15,12 @@
     <button class="tab active" id="tabMonitor">CAN Monitor</button>
     <button class="tab" id="tabCharts">自定义曲线</button>
     <button class="tab" id="tabBattery">电池信息</button>
+    <button class="tab" id="tabRcu">增程器</button>
   </div>
 
   <!-- 主视图：按 ID 分组 -->
   <div class="content" id="viewMain">
-    <div class="hint">天蓝色背景：CATL 协议中 BMS 发出的电池报文</div>
+    <div class="hint">天蓝色：BMS 电池报文　淡红色：RCU 增程器报文</div>
     <table>
       <thead>
         <tr>
@@ -44,6 +45,20 @@
       <section class="battery-section"><h3>故障信息</h3><p class="battery-note">显示当前报文中的故障；未收到或超时不代表无故障。</p><div id="batteryFaults"></div></section>
       <details class="battery-section"><summary>报文来源与更新时间</summary><div class="battery-source-wrap"><table><thead><tr><th>ID / 报文</th><th>状态</th><th>原始数据</th></tr></thead><tbody id="batterySources"></tbody></table></div></details>
       <p class="battery-note">天蓝色背景标记协议中由 BMS 发出的 ID。读数超过 10 秒未更新即标为超时。</p>
+    </div>
+  </div>
+
+  <div class="content hidden" id="viewRcu">
+    <div class="battery-page rcu-page">
+      <div class="battery-heading"><div><h2>增程器</h2><p>玉柴 RCU · CAN Matrix V3.5 · 被动读取</p></div><span class="battery-badge" id="rcuStatus" role="status">等待报文</span></div>
+      <p class="battery-note">读取 RCU 已广播的运行状态，不发送控制、查询或启动请求。</p>
+      <div class="battery-metrics rcu-metrics" id="rcuMetrics"></div>
+      <section class="battery-section"><h3>运行与故障状态</h3><div class="rcu-table-wrap" id="rcuState"></div></section>
+      <section class="battery-section"><h3>故障位图</h3><p class="battery-note">按报文分组分别显示。仅按原表提供的故障编号解释，不推断未提供的故障含义；未收到或超时不能视为无故障。</p><div id="rcuFaults"></div></section>
+      <details class="battery-section" open><summary>运行参数</summary><div class="rcu-table-wrap" id="rcuParameters"></div></details>
+      <details class="battery-section"><summary>发动机指示灯</summary><div class="rcu-table-wrap" id="rcuLamps"></div></details>
+      <details class="battery-section"><summary>软件版本与报文来源</summary><div class="rcu-table-wrap" id="rcuVersion"></div><div class="battery-source-wrap"><table><thead><tr><th>报文来源</th><th>状态 / 时间</th><th>原始数据</th></tr></thead><tbody id="rcuSources"></tbody></table></div></details>
+      <p class="battery-note">电流和功率：负值为发电，正值为耗电。一般报文超过 10 秒未更新即超时，5 秒周期的版本报文使用 15 秒。</p>
     </div>
   </div>
 

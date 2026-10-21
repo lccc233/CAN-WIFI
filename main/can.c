@@ -37,6 +37,24 @@ static const uint32_t s_battery_ids[CAN_BATTERY_FRAME_COUNT] = {
 };
 static can_msg_entry_t s_battery[CAN_BATTERY_FRAME_COUNT];
 static bool s_battery_seen[CAN_BATTERY_FRAME_COUNT];
+static const uint32_t s_rcu_ids[] = {
+    0x1404949C, 0x1405949C, 0x1891949C, 0x1892949C,
+    0x1893949C, 0x1894949C, 0x1896949C, 0x1895949C
+};
+static can_msg_entry_t s_rcu[CAN_RCU_FRAME_COUNT];
+static bool s_rcu_seen[CAN_RCU_FRAME_COUNT];
+
+uint32_t can_get_rcu_snapshot(can_msg_entry_t out[CAN_RCU_FRAME_COUNT])
+{
+    uint32_t count = 0;
+    if (!g_ring.mutex || !out) return 0;
+    xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
+    for (unsigned i = 0; i < CAN_RCU_FRAME_COUNT; i++) {
+        if (s_rcu_seen[i]) out[count++] = s_rcu[i];
+    }
+    xSemaphoreGive(g_ring.mutex);
+    return count;
+}
 
 uint32_t can_get_battery_snapshot(can_msg_entry_t out[CAN_BATTERY_FRAME_COUNT])
 {
@@ -147,6 +165,20 @@ static void can_monitor_record(const can_msg_entry_t *entry, bool data_frame)
             s_battery[i] = *entry;
             s_battery_seen[i] = true;
             break;
+        }
+        unsigned slot = CAN_RCU_FRAME_COUNT;
+        for (unsigned i = 0; i < sizeof(s_rcu_ids) / sizeof(s_rcu_ids[0]); i++) {
+            if (entry->id == s_rcu_ids[i]) { slot = i; break; }
+        }
+        if (entry->id == 0x18019894) {
+            // The source address looks like HCU, but the matrix marks RCU as
+            // sender. Keep each multiplex page independently, even at >10 Hz.
+            uint8_t page = entry->dlc ? entry->data[0] : 0;
+            slot = (page >= 1 && page <= 5) ? 7 + page : 13;
+        }
+        if (slot < CAN_RCU_FRAME_COUNT) {
+            s_rcu[slot] = *entry;
+            s_rcu_seen[slot] = true;
         }
     }
     can_monitor_id_t *bucket = NULL;
@@ -432,6 +464,7 @@ esp_err_t can_init(void)
     g_ring.mutex = xSemaphoreCreateMutex();
     g_send_mutex = xSemaphoreCreateMutex();
     memset(s_battery_seen, 0, sizeof(s_battery_seen));
+    memset(s_rcu_seen, 0, sizeof(s_rcu_seen));
     g_freq_mutex = xSemaphoreCreateMutex();
     s_live.entries = heap_caps_malloc(CAN_LIVE_CAPACITY * sizeof(can_msg_entry_t),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

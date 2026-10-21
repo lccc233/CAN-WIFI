@@ -1,5 +1,9 @@
 # 交接文档：ESP32-S3 CAN Bus Monitor
 
+> **验证状态（2026-10-21，截至本次提交）：今天截至目前的所有提交均未经过真机验证。**
+> 当天的 ESP32 烧录、PCAN 模拟广播和网页检查仅为台架模拟验证，未连接真实电池、增程器或车辆。
+> 此声明同时覆盖已提交的电池功能与本次 RCU 功能、测试及文档；详见 [今日提交验证状态](docs/validation-status.md)。
+
 ## 项目信息
 - **当前路径**: `C:\Users\liche\Desktop\Codex\CAN-WIFI`（历史段落中的旧路径仅用于追溯）
 - **主文件**: `main/main.c`, `main/can.c`, `main/can_logger.c`, `main/signal_decode.c`, `main/wifi.c`, `main/serial_cli.c`, `main/web_server.c`, `main/web_page.h`, `main/led.c`
@@ -20,6 +24,8 @@
 7. **状态灯** (WS2812 GPIO48：未连上路由器/热点未运行=红灯常亮，连上/热点运行=炫彩)
 8. **CATL 电池信息页**：SOC/总电压/总电流/三路温度/故障；只解析已接收的广播。
    保留手动发送与 NORMAL 模式。电池 ID 天蓝色标记；详见 [电池技术说明](docs/battery.md)。
+9. **玉柴 RCU 增程器页**：运行状态、电气/温度/发动机参数、指示灯和分组故障；被动解析。
+   RCU 精确 ID 使用淡红色标记，详见 [RCU 技术说明](docs/rcu.md)。
 
 ## CAN 不通根因 (2026-07-29)
 
@@ -548,7 +554,7 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 - 四窗口真实数据回放和 20s/60s 网页截图通过，最终页面回到 20s。配置未变，TWAI RUNNING / TEC=0 / REC=0。PCAN 与串口已释放；最终测试记录保留，未发送邮件。
 - 最终证据与报告：`build-mail/curve-window-test-20261018/queue128/`。早期失败试验在上级与 final/ 中，仅 queue128/ 对应最终通过版本；刷新网页或添加新 ID 后需要重新积累曲线历史。短时负载结论不覆盖所有长期场景。
 
-## CATL 电池页、烧录与 PCAN 验证（2026-10-21）
+## CATL 电池页、烧录与 PCAN 台架模拟验证（2026-10-21）
 
 - 用户要求电池信息只被动读取，保留原有手动发送。未增加查询、握手、唤醒、VIN 应答或 RTR 发送。
   手动发送函数与 HTTP 发送处理保留原实现，TWAI 仍为 250kbps NORMAL 模式（正常链路 ACK）。
@@ -565,11 +571,45 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
   手动发送 `0x123 [4] CA FE 12 34` 由 PCAN 独立收到。设备最终 TWAI RUNNING、TEC=0、REC=0。
 - 原始记录/截图在忽略目录 `tmp/battery/hardware/`；仓库保留选定的可复核报告与截图，
   入口为 [电池说明](docs/battery.md)。软件回归使用 `test-battery-ui.mjs`、既有记录/邮件 UI 测试；
-  `test-battery-browser.mjs` 使用模拟 HTTP，`test-battery-device.mjs` 为只读实机检查，
+  `test-battery-browser.mjs` 使用模拟 HTTP，`test-battery-device.mjs` 为只读 ESP32 台架检查，
   `test-battery-pcan.mjs` 会发送台架模拟广播并显式测试一次手动发送，仅用于独立 PCAN/ESP32 台架。
 - USB-Serial/JTAG 下载后曾停留 DOWNLOAD；使用 `--after watchdog_reset read_mac` 启动应用成功，
   不需要擦除或重烧。测试发送器与串口均已关闭，设备保持运行；未接入真实电池或车辆。
 - 本次提交包含源码、测试和技术文档；历史 `v2026.10.08-recording` EXE/ZIP 未更新，不含本次电池页。
+
+## 玉柴 RCU 增程器页（2026-10-21）
+
+- 来源为用户上一级目录提供的 RCU V3.5 XLS，`VCU-RCU报文信息` 第 63–257 行。
+  按 RCU 发送列精确匹配九个扩展 ID；`RCUDTC1=0x18019894` 地址看似例外但按矩阵原值保留。
+  HCU 控制指令与其他源地址不着色、不参与 RCU 状态解码，未增加控制/请求/启动 CAN 发送。
+- 新增第四个“增程器”页签，`main/web_rcu.h` 实现 45 个字段与 137 个故障位，正常/降功率/强制怠速/停机等枚举
+  直接来自矩阵。RCU 行背景 `#ffe1e1`，BMS 天蓝色及原手动发送、记录/曲线/邮件保持原行为。
+- 所有信号 Intel 小端，支持非对齐 12/30 位字段。未定义全 FF 无效规则，按原物理范围校验；
+  24 位累计电量最大值、12 位功率最大值、软件版本和原始故障码的最大值按矩阵有效值保留。
+- 接收任务新增独立 14 槽 RCU 快照，含 8 个非复用报文、五个 DTC 分组及一个未知分组诊断槽。
+  `GET /api/messages` 新增 `rcu` 数组，保留既有字段及 `battery`。数据帧才更新；主表清空或 ID 淘汰不影响状态。
+  浏览器从独立缓存读取，普通报文 10 秒超时、5 秒周期版本报文 15 秒超时；此超时是应用显示规则。
+- DTC 位表不连续，按每个 `m1`–`m5` 具体位置解码。描述虽只提 1–4，详细表最后两行提供 m5，已保留。
+  只有故障编号、无部件含义的信号不编造诊断名称。协议没有校验算法，RCU6 校验和字段仅显示原值。
+- 已与原 XLS 逐项比对 45 个布局/缩放/范围及 137 个故障位置，RCU 专项、旧电池/录制/邮件回归通过。
+  1280/390/320px 模拟 HTTP 的真实浏览器检查通过，九个淡红 ID 与 BMS 天蓝同时显示，无溢出或 JS 错误。
+  ESP-IDF 5.4.4 编译通过，产物在 `build-mail/`；后续烧录与联合 PCAN 验证见下一节。
+  原 XLS 保持只读且不纳入仓库，提取审计、截图和构建日志在忽略目录 `tmp/rcu/`。
+
+## 电池与 RCU 联合烧录与台架模拟验证（2026-10-21）
+
+- 用户明确要求烧录并同时测试两类功能。COM5 写入bootloader、分区表和应用，三段均通过Hash校验，
+  `--after watchdog_reset` 启动成功。应用1,170,016字节，SHA-256见 `docs/battery-rcu-test.md`。
+  未擦NVS，前后比较四组完整信号配置一致，Wi-Fi/邮件配置保留；PSRAM容量349525帧。
+- 独立PCAN-USB与ESP32台架，250kbps。两个真实网页客户端分别显示电池/RCU，混合广播5阶段：
+  正常714帧、故障714帧、仅清第一组341帧、无效/短帧536帧、零值/有效最大值714帧；
+  实际发送3019、接收增量3019，boot未变化，无自动CAN数据发送或VIN应答。
+- RCU五组故障分别保留，第二组bit8故障46、第五组bit9故障137等稀疏位正确；只清第一组不清其他组。
+  淡红/天蓝同时可见。手动发 `0x123 [4] CA FE 12 34`，PCAN独立收到；不计入本机RX总数。
+- 停发后的电池10秒、RCU10/15秒超时正确，双网页无JS错误。最终TWAI RUNNING、TEC=0、REC=0，
+  测试广播、PCAN和串口均已关闭，设备继续运行。没有连接真实电池/增程器或车辆。
+- 可重复工具 `tools/test-battery-rcu-pcan.mjs`，会发送台架模拟广播并显式测试一次手动发送。
+  原始证据在 `tmp/rcu/hardware/`；仓库内报告入口 `docs/battery-rcu-test.md`。
 
 ## 关键代码位置
 
@@ -582,8 +622,9 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 | `main/serial_cli.c/.h` | 串口配置台：20ms 轮询双口硬件 FIFO 输入（USJ ll + UART0 ll，绕开 VFS 读），回显/行解析、help/info/status(JSON)/mode/ssid/pass/ip/reboot |
 | `main/led.c` | WS2812 状态灯（未连接=红，已连接/热点运行=炫彩；逻辑依赖 `wifi_is_connected()`） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export /api/signals |
-| `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_BATTERY_JS + PAGE_JS） |
+| `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_BATTERY_JS + PAGE_RCU_JS + PAGE_JS） |
 | `main/web_battery.h` | CATL 精确 ID/故障位表、被动解码、超时与状态、独立电池页面渲染 |
+| `main/web_rcu.h` | 玉柴 RCU 精确 ID/45 字段/137 故障位、分组快照解码、淡红色标记和增程器页面 |
 | `main/time_sync.c/.h` | 浏览器授时换算（CSV time 列真实时间 / 曲线标题时间） |
 | `main/web_head.h` / `web_body.h` / `web_js.h` | 页面三段源：头/样式+水印、DOM、脚本 |
 | `main/main.c` | 入口：NVS → WiFi(AP/STA) → CAN → **can_log_init →** HTTP Server → LED → 串口配置台 |

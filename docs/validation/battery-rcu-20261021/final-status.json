@@ -1,0 +1,13 @@
+{
+  "ip": "10.31.134.250",
+  "uptime_s": 322,
+  "twai": "RUNNING",
+  "tec": 0,
+  "rec": 0,
+  "can_total": 3019,
+  "mail_configured": true,
+  "signal_count": 4,
+  "psram": true,
+  "record_capacity": 349525,
+  "boot": "feba14c2"
+}

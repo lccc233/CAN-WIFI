@@ -2,6 +2,10 @@
 
 基于 ESP-IDF 的 CAN 总线监控工具：ESP32-S3 通过 TWAI（CAN 2.0）接收总线数据，以 Web 页面实时展示，支持手动发送 CAN 帧；完整原始帧记录保存在**设备 PSRAM**，浏览器按帧序号分批读取并统一解码，用于实时曲线和 CSV。
 
+> **验证状态（2026-10-21，截至本次提交）：今天截至目前的所有提交均未经过真机验证。**
+> 已完成的软件检查、编译、ESP32 烧录及 PCAN 模拟广播仅属于台架模拟验证，未连接真实电池、增程器或车辆。
+> 适用提交与验证边界见 [今日提交验证状态](docs/validation-status.md)。
+
 ## 功能
 
 - **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO5，RX=GPIO4
@@ -9,8 +13,10 @@
 - **电池信息页**：按 CATL A-CAN V3.2.1 被动解析已有报文，显示 SOC、总电压、总电流、
   最高/最低/平均温度、最高故障等级、故障码及中文故障明细；不发送查询、握手或唤醒 CAN 报文。
   无效、缺失、断线、10 秒超时明确标示。字段、ID 与验证方法见 [电池信息说明](docs/battery.md)。
+- **增程器页**：按玉柴 RCU V3.5 被动解析运行状态、转速、电压/电流/功率、温度、指示灯和故障；
+  RCU 报文在主表以**淡红色背景**标记，电池仍为天蓝色。字段与分组故障说明见 [RCU 技术说明](docs/rcu.md)。
 - **Web 实时界面**（HTTP Server，页面 200ms 轮询刷新）：
-  - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **自定义曲线**（任意 ID 自定义信号）/ **电池信息**
+  - 顶层页签：**CAN Monitor** / **自定义曲线** / **电池信息** / **增程器**
   - 按 ID 分组展示最新消息（**按 ID 从小到大排序**），列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
   - **Freq**：每个 ID 的发送频率（条/秒，基于滚动 1 秒窗口统计）
   - 监控缓存按 ID 独立保留**最新 10 条**，高频 ID 不挤占其他 ID 的历史；最多跟踪 128 个 ID，超出时淘汰最久未更新的 ID。
@@ -71,8 +77,9 @@
 
 ## 构建与烧录
 
-当前源码包含 2026-10-21 电池信息功能，已通过 [PCAN 台架实测](docs/battery.md#2026-10-21-烧录与-pcan-实机验证)。
-下方 `v2026.10.08-recording` 是历史烧录包，不含本次电池页；使用电池功能请按本节从最新源码构建。
+当前源码包含 2026-10-21 电池和增程器信息功能；已完成 [电池 PCAN 台架模拟验证](docs/battery.md#2026-10-21-烧录与-pcan-台架模拟验证)
+及 [电池与 RCU 联合台架模拟验证](docs/battery-rcu-test.md)，尚未经过真机验证。
+下方 `v2026.10.08-recording` 是历史烧录包，不含这两个页面；请按本节从最新源码构建。
 
 无需安装开发环境的 Windows 64位独立烧录包：[GitHub Release 下载](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.08-recording)。
 附件为 `CAN-WIFI_20261008_RECORDING_Win64.zip`，包含完整记录新版；本地打包输出在 `release/` 目录。
@@ -81,7 +88,8 @@
 参数 DIO / 80MHz / 16MB，保留配置时不要点击 Erase Flash。
 完整说明见 [独立 EXE 与官方网页版烧录方法](docs/offline-flashing.md)。
 
-新版已通过[五分钟 CAN 高负载实机验证](docs/recording-stress.md)：四路正弦与 64 个背景 ID 同时运行，实际发送的全部目标帧及 CSV 完整匹配。
+2026-10-08 的历史记录版本完成过 [五分钟 CAN 高负载台架测试](docs/recording-stress.md)：四路正弦与 64 个背景 ID 同时运行，实际发送的全部目标帧及 CSV 完整匹配。
+该历史结果不代表 2026-10-21 提交已通过真机验证。
 
 ```bash
 idf.py -B build-mail -D SDKCONFIG=build-mail/sdkconfig -p <COM口> build flash monitor
@@ -221,7 +229,7 @@ OAuth 授权仅用于首次配置；之后由设备保存轮换的 refresh token
 
 | 接口 | 说明 |
 |------|------|
-| `GET /api/messages` | 返回 `{boot,clk:{sync,boot,ep},rec,total,freqs:[{id,f}],messages:[{seq,t,id,dlc,ext,data}],battery:[{seq,t,id,dlc,ext,data}]}`；`battery` 是四个电池状态/温度/故障 ID 的独立最新帧缓存，详见 [电池接口说明](docs/battery.md#http-接口与集成)；`rec` 含记录编号、容量及采集质量；忙闸期间返回 `{"busy":1}` |
+| `GET /api/messages` | 返回 `{boot,clk:{sync,boot,ep},rec,total,freqs,messages,battery,rcu}`；三个帧数组均使用 `{seq,t,id,dlc,ext,data}`；`battery` 为四帧电池缓存，[`rcu`](docs/rcu.md#缓存api-与超时) 为独立 RCU 状态/分组故障缓存；`rec` 含记录编号、容量及采集质量；忙闸期间返回 `{"busy":1}` |
 | `POST /api/time` | 浏览器授时：body `{epoch_ms, tz}`（UTC 毫秒 + 时区偏移分钟） |
 | `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended）；id 越界（标准帧 >0x7FF / 扩展帧 >0x1FFFFFFF）或 dlc 非法时返回 400 |
 | `POST /api/live`（也支持 GET 查询） | JSON `{from,boot,ids:[数值ID...]}` 按游标增量返回曲线目标帧（最多 512 帧），报告缓冲覆盖；独立于监控清空及完整记录 |
@@ -252,8 +260,9 @@ main/
 ├── time_sync.c/.h     # 浏览器授时换算（真实时间戳）
 ├── led.c / led.h      # WS2812 状态灯（红=未连接，炫彩=已连接/热点运行）
 ├── web_server.c       # HTTP 服务与 JSON API / CSV 导出
-├── web_page.h         # 页面组装宏（head + body + battery JS + main JS）
+├── web_page.h         # 页面组装宏（head + body + battery JS + RCU JS + main JS）
 ├── web_battery.h      # CATL 电池解码、故障位表、ID 标记、数据状态与渲染
+├── web_rcu.h          # 玉柴 RCU 状态解码、分组故障、淡红色标记与渲染
 └── web_head.h web_body.h web_js.h   # 前端页面源（HTML 头+样式 / DOM / 主脚本）
 
 sdkconfig.defaults # kconfig 默认值（PSRAM/Flash），改配置改这里，不要手改 sdkconfig

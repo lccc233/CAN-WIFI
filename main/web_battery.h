@@ -157,6 +157,7 @@ function renderBattery() {
   }).join('');
 }
 function showBattery() {
+  document.getElementById('viewRcu').classList.add('hidden');
   currentView = 'battery'; setTopTab('tabBattery');
   contentMain.classList.add('hidden'); contentDetail.classList.add('hidden'); contentCharts.classList.add('hidden');
   document.getElementById('viewBattery').classList.remove('hidden');

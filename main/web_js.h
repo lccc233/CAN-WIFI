@@ -6,7 +6,7 @@ var MONITOR_PER_ID = 10;
 var allMessages = [];
 var allFreqs = [];
 var lastTotal = 0;
-var currentView = 'main';   // 'main' | 'detail' | 'charts' | 'battery'
+var currentView = 'main';   // 'main' | 'detail' | 'charts' | 'battery' | 'rcu'
 var detailId = '';
 var autoScrollMain = true;
 var autoScrollDetail = true;
@@ -86,7 +86,7 @@ function renderMain() {
   var html = '';
   for (var i = 0; i < ids.length; i++) {
     var m = groups[ids[i]];
-    html += '<tr class="clickable' + (isBatteryFrame(m) ? ' battery-row' : '') + '" onclick="showDetail(\'' + m.id + '\')">'
+    html += '<tr class="clickable' + (isBatteryFrame(m) ? ' battery-row' : '') + (isRcuFrame(m) ? ' rcu-row' : '') + '" onclick="showDetail(\'' + m.id + '\')">'
       + '<td class="col-id">' + m.id + '</td>'
       + '<td class="col-count">' + m.count + '</td>'
       + '<td class="col-freq">' + fmtFreq(freqMap[m.id]) + '</td>'
@@ -147,6 +147,7 @@ function niceStep(range, target) {
 }
 
 function showDetail(id) {
+  document.getElementById('viewRcu').classList.add('hidden');
   document.getElementById('viewBattery').classList.add('hidden');
   detailId = id;
   currentView = 'detail';
@@ -164,6 +165,7 @@ function showDetail(id) {
 }
 
 function showMain() {
+  document.getElementById('viewRcu').classList.add('hidden');
   document.getElementById('viewBattery').classList.add('hidden');
   currentView = 'main';
   setTopTab('tabMonitor');
@@ -947,6 +949,7 @@ function saveForm() {
 
 // ===== 自定义曲线页（每信号一条曲线带，独立量程） =====
 function showCharts() {
+  document.getElementById('viewRcu').classList.add('hidden');
   document.getElementById('viewBattery').classList.add('hidden');
   currentView = 'charts';
   setTopTab('tabCharts');
@@ -1135,7 +1138,7 @@ document.getElementById('cfgRetryBtn').addEventListener('click', function() {
 });
 
 function setTopTab(id) {
-  var tabs = ['tabMonitor', 'tabCharts', 'tabBattery'];
+  var tabs = ['tabMonitor', 'tabCharts', 'tabBattery', 'tabRcu'];
   for (var i = 0; i < tabs.length; i++) {
     var el = document.getElementById(tabs[i]);
     if (!el) continue;
@@ -1155,6 +1158,7 @@ document.getElementById('viewDetail').addEventListener('scroll', function() {
 document.getElementById('tabMonitor').addEventListener('click', showMain);
 document.getElementById('tabCharts').addEventListener('click', showCharts);
 document.getElementById('tabBattery').addEventListener('click', showBattery);
+document.getElementById('tabRcu').addEventListener('click', showRcu);
 
 // 窗口尺寸变化时重绘（画布尺寸依赖像素，不能只靠 CSS 拉伸）
 var chartResizeTimer = null;
@@ -1172,6 +1176,8 @@ async function pollMessages() {
   try { processMessages(await apiJson('/api/messages')); }
   catch (e) {
     batteryConnected = false;
+    rcuConnected = false;
+    if (currentView === 'rcu') renderRcu();
     if (currentView === 'battery') renderBattery();
     document.getElementById('statusDot').className = 'dot off';
     document.getElementById('statusText').textContent = 'Disconnected';
@@ -1186,8 +1192,10 @@ function processMessages(d) {
     clkEp = d.clk.ep || 0;
   }
   var bootChanged = monitorBoot !== d.boot;
-  if (bootChanged) { monitorBoot = d.boot; histById = {}; resetBattery(); }
+  if (bootChanged) { monitorBoot = d.boot; histById = {}; resetBattery(); resetRcu(); }
   ingestBattery(d);
+  ingestRcu(d);
+  if (currentView === 'rcu') renderRcu();
   if (currentView === 'battery') renderBattery();
   if (d.total !== lastTotal || bootChanged) {
     allMessages = d.messages || []; allFreqs = d.freqs || []; lastTotal = d.total;
@@ -1208,6 +1216,7 @@ function processMessages(d) {
 setInterval(pollMessages, 200);
 pollMessages();
 setInterval(function() { if (currentView === 'battery') renderBattery(); }, 1000);
+setInterval(function() { if (currentView === 'rcu') renderRcu(); }, 1000);
 setInterval(pollLive, 200);
 pollLive();
 

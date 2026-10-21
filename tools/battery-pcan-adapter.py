@@ -1,6 +1,6 @@
-"""Bounded PCAN bench adapter for test-battery-pcan.mjs; JSON frames on stdin.
+"""Bounded PCAN bench adapter for battery/RCU tests; JSON frames on stdin.
 
-This sends synthetic BMS broadcasts on an isolated PCAN/ESP32 test bench.
+This sends synthetic status broadcasts on an isolated PCAN/ESP32 test bench.
 An empty frame list only listens. Never run against a vehicle bus.
 """
 import argparse

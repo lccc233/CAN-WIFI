@@ -1,5 +1,8 @@
 # CATL 电池信息页
 
+> **验证状态（2026-10-21，截至本次提交）：今天截至目前的所有提交均未经过真机验证。**
+> 下文烧录和 PCAN 结果仅为台架模拟验证，未连接真实电池、增程器或车辆；见 [今日提交验证状态](validation-status.md)。
+
 依据用户提供的 `CATL_eBUS_Protocol_A-CAN_V3.2.1_20220613.pdf` 实现。
 协议第 14–15 页规定 250 kbps、Intel 小端、`物理值 = 原始值 × Factor + Offset`。
 
@@ -111,7 +114,7 @@ node tools/test-battery-browser.mjs
 本次构建使用已安装的 ESP-IDF 5.4.4，输出在 `build-mail/`，从 `sdkconfig.defaults` 生成配置。
 本地旧 `build/` 缓存指向移动前的目录，不用于本次验证。
 
-### 2026-10-21 烧录与 PCAN 实机验证
+### 2026-10-21 烧录与 PCAN 台架模拟验证
 
 已通过 COM5 烧录到 ESP32-S3（MAC `34:85:18:8e:ee:80`、16MB Flash、8MB PSRAM）。
 三个写入区域均通过 esptool Hash 校验；未擦除 NVS，设备原有 Wi-Fi、邮件配置和 4 组信号配置保留。
@@ -132,7 +135,7 @@ PCAN 广播 → ESP32 接收 → HTTP 原始帧 → 浏览器解码与显示。
 | 手动发送 | 点击原有 Send 按钮，PCAN 独立收到标准帧 `0x123`，DLC=4，`CA FE 12 34` |
 | 超时 | 停止广播 10 秒后读数变为 `—`，显示超时和“故障状态待确认” |
 | 接收完整性 | 最终完整测试一轮 288 条 PCAN 广播，ESP32 接收增量恰为 288，无丢失 |
-| 浏览器 | 1280 px 与 390 px 真机页面验证通过，无 JavaScript 错误 |
+| 浏览器 | 1280 px 与 390 px ESP32 台架页面检查通过，无 JavaScript 错误 |
 
 手动发送是显式测试操作，不属于电池自动获取逻辑；TWAI 不自接收自己的发送，
 因此手动帧在 PCAN 侧核验，不计入 ESP32 的接收增量。
@@ -141,20 +144,21 @@ PCAN 广播 → ESP32 接收 → HTTP 原始帧 → 浏览器解码与显示。
 记录在 `tmp/battery/hardware/`：`flash.log`、`device-browser-report.json`、`pcan-report.json`、
 `vin-request-report.json`、`final-status.json`，以及正常/故障/超时/主表截图。
 
-本次已烧录应用为 1,149,664 字节，SHA-256：
+首次电池版已烧录应用为 1,149,664 字节，SHA-256：
 `994935fbf47a28ff8a0363780b9ed08ca8f28918e9dd8552827eb0640fe5734a`。
 这是本次构建产物的校验值，源码提交后重新构建的版本信息可能导致哈希不同。
+后续包含增程器页的联合版本及烧录校验值见 [电池与 RCU 联合验证](battery-rcu-test.md)。
 
 仓库内保留最终通过轮次的 [PCAN 报告](validation/battery-20261021/pcan-report.json)、
 [VIN 请求报告](validation/battery-20261021/vin-request-report.json) 和
 [设备最终状态](validation/battery-20261021/final-status.json)，无需依赖本机临时目录查看结果。
 报告只描述本次短时独立台架测试，不代替真实电池或车辆接入验证。
 
-实机正常读数（PCAN 模拟电池广播）：
+台架模拟正常读数（PCAN 模拟电池广播）：
 
 ![PCAN 到 ESP32 的电池信息页](images/battery-pcan-normal.png)
 
-实机 CAN 主表：BMS 报文为天蓝色，普通标准帧保持原背景。
+ESP32 台架 CAN 主表：BMS 报文为天蓝色，普通标准帧保持原背景。
 
 ![BMS 报文天蓝色标记](images/battery-pcan-monitor.png)
 

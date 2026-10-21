@@ -1,0 +1,631 @@
+{
+  "base": "http://10.31.134.250",
+  "phases": [
+    {
+      "name": "normal",
+      "battery": {
+        "values": [
+          80,
+          600,
+          100,
+          28,
+          35,
+          20
+        ],
+        "status": "当前无故障",
+        "faults1": [],
+        "faults2": []
+      },
+      "rcu": {
+        "status": "正常充电",
+        "values": {
+          "nEngActSpdTxi": 1600,
+          "tEngCoTempTx": 80,
+          "tEngUrTempTx": 30,
+          "rEngUrFldLvl": 50,
+          "pEngOilPrsFrmRCU": 400,
+          "EngUrConc": 32.5,
+          "bEngInAirLamp": 1,
+          "bEngWtrInOilLamp": 0,
+          "bEngOilLpLamp": 0,
+          "bEngWtrOTLamp": 0,
+          "bPTORunLamp": 1,
+          "bCrsRunLamp": 1,
+          "bCbkBrkLamp": 1,
+          "bEgBrkLamp": 0,
+          "bEgHiTLamp": 1,
+          "stREXErrDeg": 0,
+          "bEmgyHVOffReq": 0,
+          "stREX": 7,
+          "nFISGActSpdTx": 1500,
+          "trqFISGActTx": -250,
+          "tISGInvTempTx": 50,
+          "tISGCoilTempTx": 70,
+          "numRcu6MsgCnt": 15,
+          "numRcu6MsgChks": 10,
+          "iREXOutCur": -100,
+          "pwrREXOut": -60,
+          "pwrREXMax": -100,
+          "bPwrLimCmd": 0,
+          "stREXSysErrLvl": 0,
+          "stGCUActvDchrgFb": 1,
+          "bEngWrmReq": 0,
+          "wRexGenrTot": 123456,
+          "uREXOutVlt": 600,
+          "pwrREMaxDischrg": 50,
+          "numMajrVers": 3,
+          "numSendVers": 5,
+          "numProdCod": 19088743,
+          "tiYear": 25,
+          "tiMth": 10,
+          "tiDay": 21,
+          "pwrREPowerOnLopAvrg": -60,
+          "pwrREGenrLopAvrg": -55,
+          "pwrRESetTiAvrg": -50,
+          "pwrREReq": 10,
+          "numRcuFaultCod": 0
+        },
+        "groups": [
+          {
+            "page": 1,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 2,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 3,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 4,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 5,
+            "active": [],
+            "ready": true
+          }
+        ],
+        "cache_slots": 13
+      },
+      "sent": {
+        "0x1884EFF3": 40,
+        "0x1886EFF3": 16,
+        "0x1881EFF3": 16,
+        "0x1882EFF3": 16,
+        "0x1404949C": 8,
+        "0x1405949C": 8,
+        "0x1891949C": 256,
+        "0x1892949C": 256,
+        "0x1893949C": 8,
+        "0x1894949C": 2,
+        "0x1896949C": 8,
+        "0x1895949C": 8,
+        "0x18019894": 40,
+        "0x1801EFF3": 16,
+        "0x123": 16
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "fault",
+      "battery": {
+        "values": [
+          40,
+          580,
+          -50,
+          35,
+          48,
+          25
+        ],
+        "status": "检测到故障",
+        "faults1": [
+          4,
+          26
+        ],
+        "faults2": [
+          11,
+          31,
+          57,
+          59,
+          60
+        ]
+      },
+      "rcu": {
+        "status": "正常充电 · 存在报警",
+        "values": {
+          "nEngActSpdTxi": 1600,
+          "tEngCoTempTx": 80,
+          "tEngUrTempTx": 30,
+          "rEngUrFldLvl": 50,
+          "pEngOilPrsFrmRCU": 400,
+          "EngUrConc": 32.5,
+          "bEngInAirLamp": 1,
+          "bEngWtrInOilLamp": 0,
+          "bEngOilLpLamp": 0,
+          "bEngWtrOTLamp": 0,
+          "bPTORunLamp": 1,
+          "bCrsRunLamp": 1,
+          "bCbkBrkLamp": 1,
+          "bEgBrkLamp": 0,
+          "bEgHiTLamp": 1,
+          "stREXErrDeg": 3,
+          "bEmgyHVOffReq": 1,
+          "stREX": 7,
+          "nFISGActSpdTx": 1500,
+          "trqFISGActTx": -250,
+          "tISGInvTempTx": 50,
+          "tISGCoilTempTx": 70,
+          "numRcu6MsgCnt": 15,
+          "numRcu6MsgChks": 10,
+          "iREXOutCur": -100,
+          "pwrREXOut": -60,
+          "pwrREXMax": -100,
+          "bPwrLimCmd": 1,
+          "stREXSysErrLvl": 3,
+          "stGCUActvDchrgFb": 1,
+          "bEngWrmReq": 1,
+          "wRexGenrTot": 123456,
+          "uREXOutVlt": 600,
+          "pwrREMaxDischrg": 50,
+          "numMajrVers": 3,
+          "numSendVers": 5,
+          "numProdCod": 19088743,
+          "tiYear": 25,
+          "tiMth": 10,
+          "tiDay": 21,
+          "pwrREPowerOnLopAvrg": -60,
+          "pwrREGenrLopAvrg": -55,
+          "pwrRESetTiAvrg": -50,
+          "pwrREReq": 10,
+          "numRcuFaultCod": 0
+        },
+        "groups": [
+          {
+            "page": 1,
+            "active": [
+              1,
+              45
+            ],
+            "ready": true
+          },
+          {
+            "page": 2,
+            "active": [
+              46,
+              78
+            ],
+            "ready": true
+          },
+          {
+            "page": 3,
+            "active": [
+              79,
+              99
+            ],
+            "ready": true
+          },
+          {
+            "page": 4,
+            "active": [
+              100,
+              135
+            ],
+            "ready": true
+          },
+          {
+            "page": 5,
+            "active": [
+              136,
+              137
+            ],
+            "ready": true
+          }
+        ],
+        "cache_slots": 13
+      },
+      "sent": {
+        "0x1884EFF3": 40,
+        "0x1886EFF3": 16,
+        "0x1881EFF3": 16,
+        "0x1882EFF3": 16,
+        "0x1404949C": 8,
+        "0x1405949C": 8,
+        "0x1891949C": 256,
+        "0x1892949C": 256,
+        "0x1893949C": 8,
+        "0x1894949C": 2,
+        "0x1896949C": 8,
+        "0x1895949C": 8,
+        "0x18019894": 40,
+        "0x1801EFF3": 16,
+        "0x123": 16
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "partial-clear",
+      "battery": {
+        "values": [
+          80,
+          600,
+          100,
+          28,
+          35,
+          20
+        ],
+        "status": "当前无故障",
+        "faults1": [],
+        "faults2": []
+      },
+      "rcu": {
+        "status": "正常充电 · 存在报警",
+        "values": {
+          "nEngActSpdTxi": 1600,
+          "tEngCoTempTx": 80,
+          "tEngUrTempTx": 30,
+          "rEngUrFldLvl": 50,
+          "pEngOilPrsFrmRCU": 400,
+          "EngUrConc": 32.5,
+          "bEngInAirLamp": 1,
+          "bEngWtrInOilLamp": 0,
+          "bEngOilLpLamp": 0,
+          "bEngWtrOTLamp": 0,
+          "bPTORunLamp": 1,
+          "bCrsRunLamp": 1,
+          "bCbkBrkLamp": 1,
+          "bEgBrkLamp": 0,
+          "bEgHiTLamp": 1,
+          "stREXErrDeg": 0,
+          "bEmgyHVOffReq": 0,
+          "stREX": 7,
+          "nFISGActSpdTx": 1500,
+          "trqFISGActTx": -250,
+          "tISGInvTempTx": 50,
+          "tISGCoilTempTx": 70,
+          "numRcu6MsgCnt": 15,
+          "numRcu6MsgChks": 10,
+          "iREXOutCur": -100,
+          "pwrREXOut": -60,
+          "pwrREXMax": -100,
+          "bPwrLimCmd": 0,
+          "stREXSysErrLvl": 0,
+          "stGCUActvDchrgFb": 1,
+          "bEngWrmReq": 0,
+          "wRexGenrTot": 123456,
+          "uREXOutVlt": 600,
+          "pwrREMaxDischrg": 50,
+          "numMajrVers": 3,
+          "numSendVers": 5,
+          "numProdCod": 19088743,
+          "tiYear": 25,
+          "tiMth": 10,
+          "tiDay": 21,
+          "pwrREPowerOnLopAvrg": -60,
+          "pwrREGenrLopAvrg": -55,
+          "pwrRESetTiAvrg": -50,
+          "pwrREReq": 10,
+          "numRcuFaultCod": 0
+        },
+        "groups": [
+          {
+            "page": 1,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 2,
+            "active": [
+              46,
+              78
+            ],
+            "ready": true
+          },
+          {
+            "page": 3,
+            "active": [
+              79,
+              99
+            ],
+            "ready": true
+          },
+          {
+            "page": 4,
+            "active": [
+              100,
+              135
+            ],
+            "ready": true
+          },
+          {
+            "page": 5,
+            "active": [
+              136,
+              137
+            ],
+            "ready": true
+          }
+        ],
+        "cache_slots": 13
+      },
+      "sent": {
+        "0x1884EFF3": 20,
+        "0x1886EFF3": 8,
+        "0x1881EFF3": 8,
+        "0x1882EFF3": 8,
+        "0x1404949C": 4,
+        "0x1405949C": 4,
+        "0x1891949C": 128,
+        "0x1892949C": 128,
+        "0x1893949C": 4,
+        "0x1894949C": 1,
+        "0x1896949C": 4,
+        "0x1895949C": 4,
+        "0x18019894": 4,
+        "0x1801EFF3": 8,
+        "0x123": 8
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "invalid-short",
+      "battery": {
+        "values": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "status": "故障状态待确认",
+        "faults1": [],
+        "faults2": []
+      },
+      "rcu": {
+        "status": "报文长度或数据无效（需 8 字节）",
+        "values": {
+          "nEngActSpdTxi": null,
+          "tEngCoTempTx": null,
+          "tEngUrTempTx": null,
+          "rEngUrFldLvl": null,
+          "pEngOilPrsFrmRCU": null,
+          "EngUrConc": null,
+          "bEngInAirLamp": 1,
+          "bEngWtrInOilLamp": 0,
+          "bEngOilLpLamp": 0,
+          "bEngWtrOTLamp": 0,
+          "bPTORunLamp": 1,
+          "bCrsRunLamp": 1,
+          "bCbkBrkLamp": 1,
+          "bEgBrkLamp": 0,
+          "bEgHiTLamp": 1,
+          "stREXErrDeg": null,
+          "bEmgyHVOffReq": null,
+          "stREX": null,
+          "nFISGActSpdTx": null,
+          "trqFISGActTx": null,
+          "tISGInvTempTx": null,
+          "tISGCoilTempTx": null,
+          "numRcu6MsgCnt": null,
+          "numRcu6MsgChks": null,
+          "iREXOutCur": null,
+          "pwrREXOut": null,
+          "pwrREXMax": null,
+          "bPwrLimCmd": 0,
+          "stREXSysErrLvl": 0,
+          "stGCUActvDchrgFb": 1,
+          "bEngWrmReq": 0,
+          "wRexGenrTot": 0,
+          "uREXOutVlt": null,
+          "pwrREMaxDischrg": 0,
+          "numMajrVers": 3,
+          "numSendVers": 5,
+          "numProdCod": 19088743,
+          "tiYear": 25,
+          "tiMth": 10,
+          "tiDay": 21,
+          "pwrREPowerOnLopAvrg": -60,
+          "pwrREGenrLopAvrg": -55,
+          "pwrRESetTiAvrg": -50,
+          "pwrREReq": 10,
+          "numRcuFaultCod": 0
+        },
+        "groups": [
+          {
+            "page": 1,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 2,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 3,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 4,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 5,
+            "active": [],
+            "ready": true
+          }
+        ],
+        "cache_slots": 13
+      },
+      "sent": {
+        "0x1884EFF3": 30,
+        "0x1886EFF3": 12,
+        "0x1881EFF3": 12,
+        "0x1882EFF3": 12,
+        "0x1404949C": 6,
+        "0x1405949C": 6,
+        "0x1891949C": 192,
+        "0x1892949C": 192,
+        "0x1893949C": 6,
+        "0x1894949C": 2,
+        "0x1896949C": 6,
+        "0x1895949C": 6,
+        "0x18019894": 30,
+        "0x1801EFF3": 12,
+        "0x123": 12
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "zero-boundaries",
+      "battery": {
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "status": "当前无故障",
+        "faults1": [],
+        "faults2": []
+      },
+      "rcu": {
+        "status": "准备就绪",
+        "values": {
+          "nEngActSpdTxi": 0,
+          "tEngCoTempTx": 0,
+          "tEngUrTempTx": 0,
+          "rEngUrFldLvl": 0,
+          "pEngOilPrsFrmRCU": 0,
+          "EngUrConc": 0,
+          "bEngInAirLamp": 1,
+          "bEngWtrInOilLamp": 0,
+          "bEngOilLpLamp": 0,
+          "bEngWtrOTLamp": 0,
+          "bPTORunLamp": 1,
+          "bCrsRunLamp": 1,
+          "bCbkBrkLamp": 1,
+          "bEgBrkLamp": 0,
+          "bEgHiTLamp": 1,
+          "stREXErrDeg": 0,
+          "bEmgyHVOffReq": 0,
+          "stREX": 2,
+          "nFISGActSpdTx": 0,
+          "trqFISGActTx": 0,
+          "tISGInvTempTx": 0,
+          "tISGCoilTempTx": 0,
+          "numRcu6MsgCnt": 15,
+          "numRcu6MsgChks": 10,
+          "iREXOutCur": 0,
+          "pwrREXOut": 0,
+          "pwrREXMax": 0,
+          "bPwrLimCmd": 0,
+          "stREXSysErrLvl": 0,
+          "stGCUActvDchrgFb": 1,
+          "bEngWrmReq": 0,
+          "wRexGenrTot": 16777215,
+          "uREXOutVlt": 0,
+          "pwrREMaxDischrg": 0,
+          "numMajrVers": 1023,
+          "numSendVers": 255,
+          "numProdCod": 1073741823,
+          "tiYear": 127,
+          "tiMth": 12,
+          "tiDay": 31,
+          "pwrREPowerOnLopAvrg": 2095,
+          "pwrREGenrLopAvrg": 2095,
+          "pwrRESetTiAvrg": 2095,
+          "pwrREReq": 2095,
+          "numRcuFaultCod": 255
+        },
+        "groups": [
+          {
+            "page": 1,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 2,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 3,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 4,
+            "active": [],
+            "ready": true
+          },
+          {
+            "page": 5,
+            "active": [],
+            "ready": true
+          }
+        ],
+        "cache_slots": 13
+      },
+      "sent": {
+        "0x1884EFF3": 40,
+        "0x1886EFF3": 16,
+        "0x1881EFF3": 16,
+        "0x1882EFF3": 16,
+        "0x1404949C": 8,
+        "0x1405949C": 8,
+        "0x1891949C": 256,
+        "0x1892949C": 256,
+        "0x1893949C": 8,
+        "0x1894949C": 2,
+        "0x1896949C": 8,
+        "0x1895949C": 8,
+        "0x18019894": 40,
+        "0x1801EFF3": 16,
+        "0x123": 16
+      },
+      "received": [],
+      "adapter_status": 0
+    }
+  ],
+  "javascript_errors": [],
+  "initial": {
+    "total": 0,
+    "boot": "feba14c2"
+  },
+  "manual": {
+    "sent": {},
+    "received": [
+      {
+        "id": "0x123",
+        "ext": false,
+        "rtr": false,
+        "data": "CA FE 12 34"
+      }
+    ],
+    "adapter_status": 0
+  },
+  "timeout_passed": true,
+  "final": {
+    "total": 3019,
+    "boot": "feba14c2"
+  },
+  "transmitted": 3019,
+  "received_by_esp": 3019,
+  "passed": true
+}
