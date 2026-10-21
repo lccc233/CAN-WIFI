@@ -126,7 +126,7 @@ static esp_err_t send_monitor_frames(httpd_req_t *req, const can_msg_entry_t *fr
         char entry[160];
         int n = snprintf(entry, sizeof(entry),
             "%s{\"seq\":%llu,\"t\":%lu,\"id\":\"0x%lX\",\"dlc\":%u,\"ext\":%s,\"data\":\"",
-            i ? "," : "", (unsigned long long)(seq ? seq[i] : live_seq[i]),
+            i ? "," : "", (unsigned long long)(seq ? seq[i] : (live_seq ? live_seq[i] : 0)),
             (unsigned long)frames[i].timestamp_ms, (unsigned long)frames[i].id,
             frames[i].dlc, frames[i].extended ? "true" : "false");
         if (n < 0 || (size_t)n + 27 > sizeof(entry)) return ESP_FAIL;
@@ -240,6 +240,8 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     static uint32_t seq[CAN_MONITOR_CAPACITY];
     uint32_t count, total;
     can_get_snapshot_seq(snapshot, seq, CAN_MONITOR_CAPACITY, &count, &total);
+    can_msg_entry_t battery[CAN_BATTERY_FRAME_COUNT];
+    uint32_t battery_count = can_get_battery_snapshot(battery);
 
     can_id_freq_t freqs[CAN_FREQ_MAX_IDS];
     int freq_count = can_get_id_freqs(freqs, CAN_FREQ_MAX_IDS);
@@ -297,6 +299,9 @@ static esp_err_t api_messages_handler(httpd_req_t *req)
     esp_err_t frame_ret = send_monitor_frames(req, snapshot, seq, NULL, count);
     if (frame_ret != ESP_OK) { msgs_busy_release(); return frame_ret; }
 
+    httpd_resp_sendstr_chunk(req, "],\"battery\":[");
+    frame_ret = send_monitor_frames(req, battery, NULL, NULL, battery_count);
+    if (frame_ret != ESP_OK) { msgs_busy_release(); return frame_ret; }
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_sendstr_chunk(req, NULL);
     msgs_busy_release();

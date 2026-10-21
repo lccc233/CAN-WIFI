@@ -6,7 +6,7 @@ var MONITOR_PER_ID = 10;
 var allMessages = [];
 var allFreqs = [];
 var lastTotal = 0;
-var currentView = 'main';   // 'main' | 'detail' | 'charts'
+var currentView = 'main';   // 'main' | 'detail' | 'charts' | 'battery'
 var detailId = '';
 var autoScrollMain = true;
 var autoScrollDetail = true;
@@ -86,7 +86,7 @@ function renderMain() {
   var html = '';
   for (var i = 0; i < ids.length; i++) {
     var m = groups[ids[i]];
-    html += '<tr class="clickable" onclick="showDetail(\'' + m.id + '\')">'
+    html += '<tr class="clickable' + (isBatteryFrame(m) ? ' battery-row' : '') + '" onclick="showDetail(\'' + m.id + '\')">'
       + '<td class="col-id">' + m.id + '</td>'
       + '<td class="col-count">' + m.count + '</td>'
       + '<td class="col-freq">' + fmtFreq(freqMap[m.id]) + '</td>'
@@ -147,6 +147,7 @@ function niceStep(range, target) {
 }
 
 function showDetail(id) {
+  document.getElementById('viewBattery').classList.add('hidden');
   detailId = id;
   currentView = 'detail';
   setTopTab(null);
@@ -163,6 +164,7 @@ function showDetail(id) {
 }
 
 function showMain() {
+  document.getElementById('viewBattery').classList.add('hidden');
   currentView = 'main';
   setTopTab('tabMonitor');
   contentDetail.classList.add('hidden');
@@ -945,6 +947,7 @@ function saveForm() {
 
 // ===== 自定义曲线页（每信号一条曲线带，独立量程） =====
 function showCharts() {
+  document.getElementById('viewBattery').classList.add('hidden');
   currentView = 'charts';
   setTopTab('tabCharts');
   contentMain.classList.add('hidden');
@@ -1132,7 +1135,7 @@ document.getElementById('cfgRetryBtn').addEventListener('click', function() {
 });
 
 function setTopTab(id) {
-  var tabs = ['tabMonitor', 'tabCharts'];
+  var tabs = ['tabMonitor', 'tabCharts', 'tabBattery'];
   for (var i = 0; i < tabs.length; i++) {
     var el = document.getElementById(tabs[i]);
     if (!el) continue;
@@ -1151,6 +1154,7 @@ document.getElementById('viewDetail').addEventListener('scroll', function() {
 // 顶层页签切换
 document.getElementById('tabMonitor').addEventListener('click', showMain);
 document.getElementById('tabCharts').addEventListener('click', showCharts);
+document.getElementById('tabBattery').addEventListener('click', showBattery);
 
 // 窗口尺寸变化时重绘（画布尺寸依赖像素，不能只靠 CSS 拉伸）
 var chartResizeTimer = null;
@@ -1167,6 +1171,8 @@ async function pollMessages() {
   pollBusy = true;
   try { processMessages(await apiJson('/api/messages')); }
   catch (e) {
+    batteryConnected = false;
+    if (currentView === 'battery') renderBattery();
     document.getElementById('statusDot').className = 'dot off';
     document.getElementById('statusText').textContent = 'Disconnected';
   } finally { pollBusy = false; }
@@ -1180,7 +1186,9 @@ function processMessages(d) {
     clkEp = d.clk.ep || 0;
   }
   var bootChanged = monitorBoot !== d.boot;
-  if (bootChanged) { monitorBoot = d.boot; histById = {}; }
+  if (bootChanged) { monitorBoot = d.boot; histById = {}; resetBattery(); }
+  ingestBattery(d);
+  if (currentView === 'battery') renderBattery();
   if (d.total !== lastTotal || bootChanged) {
     allMessages = d.messages || []; allFreqs = d.freqs || []; lastTotal = d.total;
     // 历史与设备快照保持一致，清空或 ID 槽淘汰后不留下旧详情。
@@ -1199,6 +1207,7 @@ function processMessages(d) {
 
 setInterval(pollMessages, 200);
 pollMessages();
+setInterval(function() { if (currentView === 'battery') renderBattery(); }, 1000);
 setInterval(pollLive, 200);
 pollLive();
 
@@ -1213,7 +1222,7 @@ document.getElementById('clearBtn').addEventListener('click', function() {
     allFreqs = [];
     lastTotal = 0;
     if (currentView === 'main') renderMain();
-    else renderDetailTable();
+    else if (currentView === 'detail') renderDetailTable();
   });
 });
 

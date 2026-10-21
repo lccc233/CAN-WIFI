@@ -14,10 +14,12 @@
   <div class="top-tabs">
     <button class="tab active" id="tabMonitor">CAN Monitor</button>
     <button class="tab" id="tabCharts">自定义曲线</button>
+    <button class="tab" id="tabBattery">电池信息</button>
   </div>
 
   <!-- 主视图：按 ID 分组 -->
   <div class="content" id="viewMain">
+    <div class="hint">天蓝色背景：CATL 协议中 BMS 发出的电池报文</div>
     <table>
       <thead>
         <tr>
@@ -32,6 +34,17 @@
       </thead>
       <tbody id="mainBody"></tbody>
     </table>
+  </div>
+
+  <div class="content hidden" id="viewBattery">
+    <div class="battery-page">
+      <div class="battery-heading"><div><h2>电池信息</h2><p>CATL A-CAN · V3.2.1 · 被动读取</p></div><span class="battery-badge" id="batteryStatus" role="status">等待报文</span></div>
+      <p class="battery-note">仅解析已接收的 BMS 广播，不发送查询、握手或唤醒报文。手动发送功能仍在 CAN Monitor 页。</p>
+      <div class="battery-metrics" id="batteryMetrics"></div>
+      <section class="battery-section"><h3>故障信息</h3><p class="battery-note">显示当前报文中的故障；未收到或超时不代表无故障。</p><div id="batteryFaults"></div></section>
+      <details class="battery-section"><summary>报文来源与更新时间</summary><div class="battery-source-wrap"><table><thead><tr><th>ID / 报文</th><th>状态</th><th>原始数据</th></tr></thead><tbody id="batterySources"></tbody></table></div></details>
+      <p class="battery-note">天蓝色背景标记协议中由 BMS 发出的 ID。读数超过 10 秒未更新即标为超时。</p>
+    </div>
   </div>
 
   <!-- 详情视图：某 ID 的历史 -->

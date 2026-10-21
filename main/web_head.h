@@ -83,6 +83,39 @@
   }
   tr:hover td { background: #e8f0fe; }
   tr.clickable { cursor: pointer; }
+  tr.battery-row td { background: #cceeff; }
+  tr.battery-row:hover td { background: #aee2fc; }
+  .battery-page { max-width: 1120px; margin: 0 auto; padding: 20px 16px; font-family: system-ui, sans-serif; }
+  .battery-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .battery-heading h2 { font-size: 1.3rem; color: #175574; }
+  .battery-heading p { color: #617787; font-size: .8rem; margin-top: 4px; }
+  .battery-note { color: #617080; font-size: .78rem; line-height: 1.7; margin: 8px 0; }
+  .battery-badge { display: inline-block; padding: 5px 10px; border-radius: 16px; background: #e8edf2; color: #526374; font-size: .78rem; white-space: nowrap; }
+  .battery-badge.ok { color: #137047; background: #e3f5eb; }
+  .battery-badge.warn { color: #8c5700; background: #fff1cf; }
+  .battery-badge.error { color: #b52620; background: #fde9e7; }
+  .battery-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+  .battery-metric, .battery-section { background: #fff; border: 1px solid #dce6ed; border-radius: 12px; padding: 16px; }
+  .battery-metric h3 { font-size: .82rem; font-weight: 500; color: #5c7080; }
+  .battery-value { font-size: 1.8rem; font-weight: 650; margin: 8px 0; color: #185b7c; font-variant-numeric: tabular-nums; }
+  .battery-value small { font-size: .85rem; font-weight: 400; }
+  .battery-metric p { font-size: .73rem; color: #687b89; overflow-wrap: anywhere; }
+  .battery-metric.unavailable .battery-value { color: #8795a0; }
+  .battery-section { margin-bottom: 12px; }
+  .battery-section h3, .battery-section summary { font-size: .9rem; font-weight: 600; }
+  .battery-section summary { cursor: pointer; }
+  .battery-fault-group { border-top: 1px solid #edf0f3; padding-top: 12px; margin-top: 12px; font-size: .82rem; }
+  .battery-fault-group p { line-height: 1.7; }
+  .battery-fault-group ul { padding-left: 22px; line-height: 1.9; margin: 8px 0; color: #b52620; }
+  .battery-source-wrap { overflow-x: auto; margin-top: 12px; }
+  .battery-source-wrap td { font-size: .73rem; }
+  @media (max-width: 640px) {
+    .battery-page { padding: 14px 10px; }
+    .battery-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .battery-metric, .battery-section { padding: 12px; }
+    .battery-value { font-size: 1.5rem; }
+    .battery-heading { flex-wrap: wrap; }
+  }
   .col-time { color: #888; width: 100px; }
   .col-id { color: #e8710a; font-weight: bold; }
   .col-dlc { color: #888; width: 50px; text-align: center; }

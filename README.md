@@ -5,8 +5,12 @@
 ## 功能
 
 - **CAN 总线监控**：TWAI 驱动，**250 kbps**，NORMAL 模式，TX=GPIO5，RX=GPIO4
+  - CATL 协议中 BMS 发出的扩展 ID 在 CAN Monitor 主表以**天蓝色背景**标记，保留手动发送。
+- **电池信息页**：按 CATL A-CAN V3.2.1 被动解析已有报文，显示 SOC、总电压、总电流、
+  最高/最低/平均温度、最高故障等级、故障码及中文故障明细；不发送查询、握手或唤醒 CAN 报文。
+  无效、缺失、断线、10 秒超时明确标示。字段、ID 与验证方法见 [电池信息说明](docs/battery.md)。
 - **Web 实时界面**（HTTP Server，页面 200ms 轮询刷新）：
-  - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **自定义曲线**（任意 ID 自定义信号）
+  - 顶层页签：**CAN Monitor**（按 ID 分组表格）/ **自定义曲线**（任意 ID 自定义信号）/ **电池信息**
   - 按 ID 分组展示最新消息（**按 ID 从小到大排序**），列：`ID / Count / Freq / DLC / Ext / Data / Last Time`
   - **Freq**：每个 ID 的发送频率（条/秒，基于滚动 1 秒窗口统计）
   - 监控缓存按 ID 独立保留**最新 10 条**，高频 ID 不挤占其他 ID 的历史；最多跟踪 128 个 ID，超出时淘汰最久未更新的 ID。
@@ -66,6 +70,9 @@
 - **供电/烧录**：USB 线接板载 USB-Serial/JTAG 口
 
 ## 构建与烧录
+
+当前源码包含 2026-10-21 电池信息功能，已通过 [PCAN 台架实测](docs/battery.md#2026-10-21-烧录与-pcan-实机验证)。
+下方 `v2026.10.08-recording` 是历史烧录包，不含本次电池页；使用电池功能请按本节从最新源码构建。
 
 无需安装开发环境的 Windows 64位独立烧录包：[GitHub Release 下载](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.08-recording)。
 附件为 `CAN-WIFI_20261008_RECORDING_Win64.zip`，包含完整记录新版；本地打包输出在 `release/` 目录。
@@ -214,7 +221,7 @@ OAuth 授权仅用于首次配置；之后由设备保存轮换的 refresh token
 
 | 接口 | 说明 |
 |------|------|
-| `GET /api/messages` | 返回 `{boot,clk:{sync,boot,ep},rec,total,freqs:[{id,f}],messages:[{seq,t,id,dlc,ext,data}]}`；`rec` 含记录编号、容量及采集质量；服务端忙闸期间秒回 `{"busy":1}` |
+| `GET /api/messages` | 返回 `{boot,clk:{sync,boot,ep},rec,total,freqs:[{id,f}],messages:[{seq,t,id,dlc,ext,data}],battery:[{seq,t,id,dlc,ext,data}]}`；`battery` 是四个电池状态/温度/故障 ID 的独立最新帧缓存，详见 [电池接口说明](docs/battery.md#http-接口与集成)；`rec` 含记录编号、容量及采集质量；忙闸期间返回 `{"busy":1}` |
 | `POST /api/time` | 浏览器授时：body `{epoch_ms, tz}`（UTC 毫秒 + 时区偏移分钟） |
 | `POST /api/send` | 发送 CAN 帧（body 含 id/dlc/data/extended）；id 越界（标准帧 >0x7FF / 扩展帧 >0x1FFFFFFF）或 dlc 非法时返回 400 |
 | `POST /api/live`（也支持 GET 查询） | JSON `{from,boot,ids:[数值ID...]}` 按游标增量返回曲线目标帧（最多 512 帧），报告缓冲覆盖；独立于监控清空及完整记录 |
@@ -245,8 +252,9 @@ main/
 ├── time_sync.c/.h     # 浏览器授时换算（真实时间戳）
 ├── led.c / led.h      # WS2812 状态灯（红=未连接，炫彩=已连接/热点运行）
 ├── web_server.c       # HTTP 服务与 JSON API / CSV 导出
-├── web_page.h         # 页面组装宏（拼接 web_head/web_body/web_js 三段源文件）
-└── web_head.h web_body.h web_js.h   # 前端页面源（HTML 头+样式 / DOM / JS）
+├── web_page.h         # 页面组装宏（head + body + battery JS + main JS）
+├── web_battery.h      # CATL 电池解码、故障位表、ID 标记、数据状态与渲染
+└── web_head.h web_body.h web_js.h   # 前端页面源（HTML 头+样式 / DOM / 主脚本）
 
 sdkconfig.defaults # kconfig 默认值（PSRAM/Flash），改配置改这里，不要手改 sdkconfig
 ```

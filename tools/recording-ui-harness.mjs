@@ -172,8 +172,9 @@ export async function boot(backend = device(), initialStorage = {}) {
     alert: message => alerts.push(message), confirm: () => true, FileReader,
     fetch: backend.fetch
   });
-  const source = fs.readFileSync(new URL('../main/web_js.h', import.meta.url), 'utf8')
-    .split('<script>')[1].split('</script>')[0];
+  const source = ['web_battery.h', 'web_js.h'].map(name =>
+    fs.readFileSync(new URL('../main/' + name, import.meta.url), 'utf8')
+      .split('<script>')[1].split('</script>')[0]).join('\n');
   vm.runInContext(source, context);
   context.toast = message => notices.push(String(message));
   await settle();

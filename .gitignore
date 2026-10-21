@@ -25,6 +25,7 @@ dependencies.lock
 
 # ---- 本地测试 / 刷写固件 ----
 /pcan_test/
+/tmp/
 
 # ---- Python ----
 __pycache__/

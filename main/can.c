@@ -32,6 +32,23 @@ static struct {
 } s_live;
 static SemaphoreHandle_t g_send_mutex;
 static uint32_t s_boot_id;
+static const uint32_t s_battery_ids[CAN_BATTERY_FRAME_COUNT] = {
+    0x1884EFF3, 0x1886EFF3, 0x1881EFF3, 0x1882EFF3
+};
+static can_msg_entry_t s_battery[CAN_BATTERY_FRAME_COUNT];
+static bool s_battery_seen[CAN_BATTERY_FRAME_COUNT];
+
+uint32_t can_get_battery_snapshot(can_msg_entry_t out[CAN_BATTERY_FRAME_COUNT])
+{
+    uint32_t count = 0;
+    if (!g_ring.mutex || !out) return 0;
+    xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
+    for (unsigned i = 0; i < CAN_BATTERY_FRAME_COUNT; i++) {
+        if (s_battery_seen[i]) out[count++] = s_battery[i];
+    }
+    xSemaphoreGive(g_ring.mutex);
+    return count;
+}
 
 // ---- 每个 ID 的接收频率统计 ----
 
@@ -121,9 +138,17 @@ void can_get_snapshot_seq(can_msg_entry_t *out, uint32_t *seq,
 }
 
 // 只覆盖同 ID 的旧帧；新 ID 在槽位满时替换最久未收到报文的 ID。
-static void can_monitor_record(const can_msg_entry_t *entry)
+static void can_monitor_record(const can_msg_entry_t *entry, bool data_frame)
 {
     xSemaphoreTake(g_ring.mutex, portMAX_DELAY);
+    if (data_frame && entry->extended) {
+        for (unsigned i = 0; i < CAN_BATTERY_FRAME_COUNT; i++) {
+            if (entry->id != s_battery_ids[i]) continue;
+            s_battery[i] = *entry;
+            s_battery_seen[i] = true;
+            break;
+        }
+    }
     can_monitor_id_t *bucket = NULL;
     for (uint32_t i = 0; i < g_ring.id_count; i++) {
         if (g_ring.ids[i].entries[0].id == entry->id) {
@@ -315,7 +340,7 @@ static void can_rx_task(void *arg)
                 // 记录优先于监控和频率统计，且不引用可能被清空/覆盖的环形槽。
                 can_log_write(&entry);
             }
-            can_monitor_record(&entry);
+            can_monitor_record(&entry, !rx_msg.rtr);
             can_freq_record(rx_msg.identifier, now_ms);
         }
     }
@@ -406,6 +431,7 @@ esp_err_t can_init(void)
     s_boot_id = esp_random();
     g_ring.mutex = xSemaphoreCreateMutex();
     g_send_mutex = xSemaphoreCreateMutex();
+    memset(s_battery_seen, 0, sizeof(s_battery_seen));
     g_freq_mutex = xSemaphoreCreateMutex();
     s_live.entries = heap_caps_malloc(CAN_LIVE_CAPACITY * sizeof(can_msg_entry_t),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

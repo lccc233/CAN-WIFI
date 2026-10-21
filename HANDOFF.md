@@ -1,10 +1,10 @@
 # 交接文档：ESP32-S3 CAN Bus Monitor
 
 ## 项目信息
-- **路径**: `C:\Users\Administrator\Desktop\CAN-WIFI`
+- **当前路径**: `C:\Users\liche\Desktop\Codex\CAN-WIFI`（历史段落中的旧路径仅用于追溯）
 - **主文件**: `main/main.c`, `main/can.c`, `main/can_logger.c`, `main/signal_decode.c`, `main/wifi.c`, `main/serial_cli.c`, `main/web_server.c`, `main/web_page.h`, `main/led.c`
-- **ESP-IDF 版本**: 5.3.5，路径 `C:\esp\v5.3.5\esp-idf`（EIM 管理：激活脚本
-  `C:\Espressif\tools\Microsoft.v5.3.5.PowerShell_profile.ps1`，工具链/venv 在 `C:\Espressif\tools`）
+- **本次验证 ESP-IDF**: 5.4.4，路径 `C:\esp\v5.4.4\esp-idf`，Python 环境为
+  `C:\Espressif\tools\python\v5.4.4\venv`；构建输出 `build-mail/`。历史版本验证结果见各日期记录。
 - **开发板**: ESP32-S3-DevKitC（模组 N16R8，8MB 八线 PSRAM）
 - **CAN 收发器**: SIT1042AQT/3（STB 接地，VCC 5V，**VIO 接 3.3V**）
 
@@ -18,6 +18,8 @@
 5. **曲线页** (顶层页签：自定义曲线=任意 ID 用户定义信号，每信号一条曲线带；详情视图仅剩原始报文表)
 6. **信号解码** (设备端仅 /api/export CSV 物理值列用；页面曲线全部浏览器解码)
 7. **状态灯** (WS2812 GPIO48：未连上路由器/热点未运行=红灯常亮，连上/热点运行=炫彩)
+8. **CATL 电池信息页**：SOC/总电压/总电流/三路温度/故障；只解析已接收的广播。
+   保留手动发送与 NORMAL 模式。电池 ID 天蓝色标记；详见 [电池技术说明](docs/battery.md)。
 
 ## CAN 不通根因 (2026-07-29)
 
@@ -546,6 +548,29 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 - 四窗口真实数据回放和 20s/60s 网页截图通过，最终页面回到 20s。配置未变，TWAI RUNNING / TEC=0 / REC=0。PCAN 与串口已释放；最终测试记录保留，未发送邮件。
 - 最终证据与报告：`build-mail/curve-window-test-20261018/queue128/`。早期失败试验在上级与 final/ 中，仅 queue128/ 对应最终通过版本；刷新网页或添加新 ID 后需要重新积累曲线历史。短时负载结论不覆盖所有长期场景。
 
+## CATL 电池页、烧录与 PCAN 验证（2026-10-21）
+
+- 用户要求电池信息只被动读取，保留原有手动发送。未增加查询、握手、唤醒、VIN 应答或 RTR 发送。
+  手动发送函数与 HTTP 发送处理保留原实现，TWAI 仍为 250kbps NORMAL 模式（正常链路 ACK）。
+- 三个顶层页签：CAN Monitor / 自定义曲线 / 电池信息。`web_battery.h` 定义 21 个 BMU 精确扩展 ID、
+  六项读数、两类故障位及数据状态。多字节 Intel 小端、当前最高故障等级 3 是严重故障而非无效值。
+- `can.c` 在 RX 数据帧路径缓存 `0x1884EFF3 / 0x1886EFF3 / 0x1881EFF3 / 0x1882EFF3` 各最新一帧，
+  与监控/曲线/录制独立；RTR 和标准帧不更新缓存。清空主表或监控 ID 淘汰不影响电池缓存。
+  `/api/messages` 新增 `battery` 数组，电池页不增加独立轮询；按设备时间戳判断 10 秒超时。
+- ESP-IDF 5.4.4 从默认配置编译通过；应用 1,149,664 字节，3MiB 分区余 63%。
+  COM5 三段烧录哈希校验通过，未擦 NVS；PSRAM、原有四组信号和邮箱配置状态均正常。
+  本轮 IP 为 `10.31.134.250`，属于当次热点网段，并非固定通用地址。
+- 独立 PCAN-USB 台架最终一轮广播 288 帧，设备接收增量恰为 288。正常、充电、故障、无效值、
+  有效零值恢复、天蓝色标记、10 秒超时和 1280/390px 真实网页通过；另发 6 条 Byte0=1 的 VIN 请求，无应答。
+  手动发送 `0x123 [4] CA FE 12 34` 由 PCAN 独立收到。设备最终 TWAI RUNNING、TEC=0、REC=0。
+- 原始记录/截图在忽略目录 `tmp/battery/hardware/`；仓库保留选定的可复核报告与截图，
+  入口为 [电池说明](docs/battery.md)。软件回归使用 `test-battery-ui.mjs`、既有记录/邮件 UI 测试；
+  `test-battery-browser.mjs` 使用模拟 HTTP，`test-battery-device.mjs` 为只读实机检查，
+  `test-battery-pcan.mjs` 会发送台架模拟广播并显式测试一次手动发送，仅用于独立 PCAN/ESP32 台架。
+- USB-Serial/JTAG 下载后曾停留 DOWNLOAD；使用 `--after watchdog_reset read_mac` 启动应用成功，
+  不需要擦除或重烧。测试发送器与串口均已关闭，设备保持运行；未接入真实电池或车辆。
+- 本次提交包含源码、测试和技术文档；历史 `v2026.10.08-recording` EXE/ZIP 未更新，不含本次电池页。
+
 ## 关键代码位置
 
 | 文件 | 说明 |
@@ -557,7 +582,8 @@ packed 20B→18B，去掉对齐 padding）。如需更长可再上条目压缩�
 | `main/serial_cli.c/.h` | 串口配置台：20ms 轮询双口硬件 FIFO 输入（USJ ll + UART0 ll，绕开 VFS 读），回显/行解析、help/info/status(JSON)/mode/ssid/pass/ip/reboot |
 | `main/led.c` | WS2812 状态灯（未连接=红，已连接/热点运行=炫彩；逻辑依赖 `wifi_is_connected()`） |
 | `main/web_server.c` | HTTP 路由：/ /api/messages /api/time /api/send /api/clear /api/rec/* /api/export /api/signals |
-| `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_JS） |
+| `main/web_page.h` | 页面组装宏（`INDEX_HTML` = PAGE_HEAD + PAGE_BODY + PAGE_BATTERY_JS + PAGE_JS） |
+| `main/web_battery.h` | CATL 精确 ID/故障位表、被动解码、超时与状态、独立电池页面渲染 |
 | `main/time_sync.c/.h` | 浏览器授时换算（CSV time 列真实时间 / 曲线标题时间） |
 | `main/web_head.h` / `web_body.h` / `web_js.h` | 页面三段源：头/样式+水印、DOM、脚本 |
 | `main/main.c` | 入口：NVS → WiFi(AP/STA) → CAN → **can_log_init →** HTTP Server → LED → 串口配置台 |

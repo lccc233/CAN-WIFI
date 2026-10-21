@@ -1,0 +1,115 @@
+{
+  "base": "http://10.31.134.250",
+  "initialTotal": 288,
+  "final": {
+    "total": 576,
+    "boot": "c3dac64c"
+  },
+  "transmitted": 288,
+  "manual_frames": 1,
+  "received_by_esp": 288,
+  "phases": [
+    {
+      "name": "normal",
+      "expected": [
+        80,
+        600,
+        100,
+        28,
+        35,
+        20
+      ],
+      "status": "当前无故障",
+      "sent": {
+        "0x1884EFF3": 12,
+        "0x1886EFF3": 12,
+        "0x1881EFF3": 12,
+        "0x1882EFF3": 12,
+        "0x1801EFF3": 12,
+        "0x123": 12
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "charge-fault",
+      "expected": [
+        40,
+        580,
+        -50,
+        35,
+        48,
+        25
+      ],
+      "status": "检测到故障",
+      "sent": {
+        "0x1884EFF3": 12,
+        "0x1886EFF3": 12,
+        "0x1881EFF3": 12,
+        "0x1882EFF3": 12,
+        "0x1801EFF3": 12,
+        "0x123": 12
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "invalid",
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "status": "故障状态待确认",
+      "sent": {
+        "0x1884EFF3": 12,
+        "0x1886EFF3": 12,
+        "0x1881EFF3": 12,
+        "0x1882EFF3": 12,
+        "0x1801EFF3": 12,
+        "0x123": 12
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "zero-recovery",
+      "expected": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "status": "当前无故障",
+      "sent": {
+        "0x1884EFF3": 12,
+        "0x1886EFF3": 12,
+        "0x1881EFF3": 12,
+        "0x1882EFF3": 12,
+        "0x1801EFF3": 12,
+        "0x123": 12
+      },
+      "received": [],
+      "adapter_status": 0
+    },
+    {
+      "name": "manual-send",
+      "sent": {},
+      "received": [
+        {
+          "id": "0x123",
+          "ext": false,
+          "rtr": false,
+          "data": "CA FE 12 34"
+        }
+      ],
+      "adapter_status": 0
+    }
+  ],
+  "javascript_errors": []
+}

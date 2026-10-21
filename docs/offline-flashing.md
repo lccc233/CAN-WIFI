@@ -2,6 +2,9 @@
 
 下载：[GitHub Release · v2026.10.08-recording](https://github.com/lccc233/CAN-WIFI/releases/tag/v2026.10.08-recording)。
 
+此历史发布包不含 2026-10-21 新增的电池信息页。本次仅更新源码与技术文档，未替换历史 EXE/ZIP。
+需要电池功能时，从仓库最新源码构建 `build-mail/` 三段 BIN；功能与台架验证见 [电池信息说明](battery.md)。
+
 发布目录：`release/CAN-WIFI_20261008_RECORDING_Win64/`。
 压缩包：`release/CAN-WIFI_20261008_RECORDING_Win64.zip`。
 
